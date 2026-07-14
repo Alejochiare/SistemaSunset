@@ -10,6 +10,7 @@
 import { initStore } from './store.js';
 import { initSidebar } from './components/sidebar.js';
 import { initTopbar } from './components/topbar.js';
+import { initAsistente } from './components/asistente.js';
 import { initRouter } from './router.js';
 import { initNotifications } from './notifications.js';
 import { $, formatearMontoInput } from './lib.js';
@@ -35,6 +36,7 @@ async function boot() {
   initTopbar();           // tema, colapso, búsqueda global, notificaciones
   initRouter();           // resuelve y renderiza la vista del hash
   initNotifications();    // alertas del SO para eventos de agenda
+  initAsistente();        // bot de ayuda (botón flotante) con preguntas frecuentes
 
   // % de ICL/IPC automático (APIs públicas) — no bloquea el arranque si tarda o falla
   actualizarIndices().catch(() => {});

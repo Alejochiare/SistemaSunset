@@ -921,15 +921,13 @@ function openAumentoModal(a) {
 
   const tipoLabels = { ICL: 'ICL (Índice Casa Propia)', IPC: 'IPC (Inflación)', fijo: 'Porcentaje fijo', otro: 'Otro' };
 
-  const linkFuente = tipo === 'IPC'
-    ? 'https://www.indec.gob.ar/indec/web/Nivel4-Tema-3-5-31'
-    : 'https://www.bcra.gob.ar/PublicacionesEstadisticas/Principales_variables.asp';
+  const linkFuente = 'https://arquiler.com/';
 
   const indiceActual = esIndice ? getUltimoIndice(tipo) : null;
 
   // Período real de este contrato: desde el último ajuste aplicado (o el inicio
-  // del contrato si todavía no tuvo ninguno) hasta hoy — es lo que determina el
-  // % real a aplicar, no un genérico "% mensual".
+  // del contrato si todavía no tuvo ninguno) hasta la fecha teórica de este
+  // período — es lo que determina el % real a aplicar, no un genérico "% mensual".
   const hoyISO = new Date().toISOString().slice(0, 10);
   const ultimoAjusteAplicado = (a.historialAjustes || []).at(-1);
   const fechaDesdeAjuste = ultimoAjusteAplicado?.fecha || a.fechaInicio;
@@ -940,6 +938,11 @@ function openAumentoModal(a) {
   const ajInfo = sel.infoAjuste(a);
   const numeroPeriodo = ajInfo ? ajInfo.applied + 1 : 1;
   const totalPeriodos = ajInfo ? ajInfo.expected : 1;
+
+  // El % del índice debe medirse solo sobre el período pactado (ej: los 4 meses
+  // que corresponden a este ajuste), no hasta hoy — si hay meses de atraso sin
+  // registrar el aumento, esos meses de más no deben inflar el % de este período.
+  const fechaHastaAjuste = ajInfo && ajInfo.proxFecha < hoyISO ? ajInfo.proxFecha : hoyISO;
 
   openModal({
     title: ajInfo && ajInfo.pendientes > 1 ? `Registrar aumento (período ${numeroPeriodo} de ${totalPeriodos})` : 'Registrar aumento',
@@ -958,10 +961,10 @@ function openAumentoModal(a) {
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem">
             <label class="form-label" style="margin:0">Ajuste por ${tipo}</label>
             <a href="${linkFuente}" target="_blank" rel="noopener"
-              style="font-size:.75rem;color:var(--primary);text-decoration:none">Ver en ${tipo === 'IPC' ? 'INDEC' : 'BCRA'} →</a>
+              style="font-size:.75rem;color:var(--primary);text-decoration:none">Ver calculadora →</a>
           </div>
           <div style="padding:.6rem .75rem;background:var(--surface-2);border-radius:var(--r-md);margin-bottom:.6rem">
-            <div style="font-size:.68rem;color:var(--text-soft);text-transform:uppercase;letter-spacing:.04em;margin-bottom:.2rem">% real desde ${fmtFechaCorta(fechaDesdeAjuste)} hasta hoy</div>
+            <div style="font-size:.68rem;color:var(--text-soft);text-transform:uppercase;letter-spacing:.04em;margin-bottom:.2rem">% real desde ${fmtFechaCorta(fechaDesdeAjuste)} hasta ${fmtFechaCorta(fechaHastaAjuste)}</div>
             <div id="indiceRealVal" style="font-size:1.3rem;font-weight:800;color:var(--primary)">${fechaDesdeAjuste ? 'Calculando…' : '—'}</div>
             <div style="font-size:.68rem;color:var(--text-faint);margin-top:.1rem">Variación acumulada real del índice para este contrato (no es el % mensual genérico)</div>
           </div>
@@ -1055,7 +1058,7 @@ function openAumentoModal(a) {
       if (esIndice && fechaDesdeAjuste) {
         const valorPrecargado = $pctIndice?.value || '';
         const fnCalc = tipo === 'IPC' ? calcularVariacionIPC : calcularVariacionICL;
-        fnCalc(fechaDesdeAjuste, hoyISO).then(pctReal => {
+        fnCalc(fechaDesdeAjuste, fechaHastaAjuste).then(pctReal => {
           const $val = overlay.querySelector('#indiceRealVal');
           if ($val) $val.textContent = `${pctReal}%`;
           if ($pctIndice && $pctIndice.value === valorPrecargado) {

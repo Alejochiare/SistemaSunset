@@ -164,6 +164,50 @@ select.field { cursor: pointer; appearance: none; padding-right: 2rem;
 .toast-title { font-weight: 700; font-size: .85rem; margin-bottom: 1px; }
 .toast-msg { font-size: .8rem; color: var(--text-soft); }
 
+/* ---------- ASISTENTE (bot de ayuda) ---------- */
+.asistente-fab {
+  position: fixed; left: 1.5rem; bottom: 1.5rem; z-index: 55;
+  width: 54px; height: 54px; border-radius: 50%; border: none;
+  background: var(--primary); color: var(--on-primary); box-shadow: var(--shadow-lg);
+  display: flex; align-items: center; justify-content: center; cursor: pointer;
+  transition: transform var(--transition), background var(--transition);
+}
+.asistente-fab:hover { background: var(--primary-hover); transform: scale(1.06); }
+.asistente-fab svg { width: 24px; height: 24px; }
+
+.asistente-panel {
+  position: fixed; left: 1.5rem; bottom: 5.75rem; z-index: 55;
+  width: 340px; max-width: calc(100vw - 3rem); height: 460px; max-height: calc(100vh - 8rem);
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md);
+  box-shadow: var(--shadow-xl); flex-direction: column; overflow: hidden;
+  animation: scaleIn .16s ease; transform-origin: bottom left;
+}
+.asistente-head {
+  padding: .9rem 1.1rem; border-bottom: 1px solid var(--border); background: var(--surface-2);
+  display: flex; justify-content: space-between; align-items: center; font-size: .9rem;
+}
+.asistente-msgs {
+  flex: 1; overflow-y: auto; padding: 1rem; display: flex; flex-direction: column; gap: .6rem;
+}
+.asistente-msg {
+  align-self: flex-start; max-width: 88%; background: var(--surface-2); color: var(--text);
+  padding: .6rem .8rem; border-radius: var(--r-md); border-bottom-left-radius: 3px;
+  font-size: .82rem; line-height: 1.55;
+}
+.asistente-msg.propio {
+  align-self: flex-end; background: var(--primary); color: var(--on-primary);
+  border-bottom-left-radius: var(--r-md); border-bottom-right-radius: 3px;
+}
+.asistente-input {
+  display: flex; gap: .5rem; padding: .75rem; border-top: 1px solid var(--border); flex-shrink: 0;
+}
+.asistente-input input {
+  flex: 1; min-width: 0; border: 1px solid var(--border); border-radius: var(--r-sm);
+  padding: 0 .75rem; font-size: .82rem; background: var(--surface); color: var(--text); height: 36px;
+}
+.asistente-input input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--ring); }
+.asistente-input button { width: 36px; height: 36px; padding: 0; flex-shrink: 0; }
+
 /* ---------- EMPTY STATE / SPINNER ---------- */
 .empty {
   text-align: center; padding: 5rem 2rem;

@@ -13,6 +13,13 @@ function mesLabel(s) {
   return `${nombreMes(+m - 1)} ${y}`;
 }
 
+function saludoHora() {
+  const h = new Date().getHours();
+  if (h < 12) return 'Buen día';
+  if (h < 20) return 'Buenas tardes';
+  return 'Buenas noches';
+}
+
 export default function inicio(root) {
   root.innerHTML = `<div class="view" id="vInicio"></div>`;
   const render = () => pintarInicio(root.querySelector('#vInicio'));
@@ -31,6 +38,7 @@ function pintarInicio(el) {
 
   // Cobros vencidos (mes actual o anteriores, cobrados o nunca registrados)
   const cobrosImpagos = alquileres
+    .filter(a => !['rescindido', 'renovado'].includes(a.estado))
     .flatMap(a => sel.cobrosImpagosMes(a).map(c => ({ ...c, alq: a })))
     .sort((a, b) => a.mes.localeCompare(b.mes))
     .slice(0, 5);
@@ -41,11 +49,15 @@ function pintarInicio(el) {
   const { propiedades } = getState();
   const propsDisponibles = propiedades.filter(p => p.estado === 'disponible').length;
 
+  const fechaLarga = new Date().toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long' });
+  const esNoche = new Date().getHours() >= 20 || new Date().getHours() < 6;
+
   el.innerHTML = `
-    <div class="view-head">
+    <div class="inicio-hero">
+      <div class="inicio-hero-icon">${icon(esNoche ? 'moon' : 'sun')}</div>
       <div>
-        <h1 class="view-title">Panel</h1>
-        <p class="view-sub">${fmtFechaCorta(new Date().toISOString())}</p>
+        <h1 class="inicio-hero-title">${saludoHora()} 👋</h1>
+        <p class="inicio-hero-sub">${fechaLarga}</p>
       </div>
     </div>
 

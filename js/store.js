@@ -216,7 +216,8 @@ export const sel = {
     const hoy = new Date();
     const resultado = [];
     state.alquileres.forEach(alq => {
-      if (sel.estadoAlquiler(alq) !== 'activo') return;
+      if (['rescindido', 'renovado'].includes(alq.estado)) return;
+      if (sel.diasAlVencimiento(alq) < 0) return;
       if (!alq.fechaInicio || !alq.frecuenciaAjuste) return;
       const inicio = new Date(alq.fechaInicio);
       const mesesFrecuencia = Number(alq.frecuenciaAjuste) || 6;
@@ -300,6 +301,7 @@ export const sel = {
   /* ---- KPIs para Inicio ---- */
   kpis() {
     const cobrosVencidos = state.alquileres
+      .filter(a => !['rescindido', 'renovado'].includes(a.estado))
       .flatMap(a => sel.cobrosImpagosMes(a)).length;
 
     return {
