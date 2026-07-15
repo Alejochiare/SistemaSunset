@@ -919,7 +919,7 @@ function openAumentoModal(a) {
 
   const montoInicial = esFijo ? calcNuevoMonto(pctFijo, 0) : '';
 
-  const tipoLabels = { ICL: 'ICL (Índice Casa Propia)', IPC: 'IPC (Inflación)', fijo: 'Porcentaje fijo', otro: 'Otro' };
+  const tipoLabels = { ICL: 'ICL (Índice de Contratos de Locación)', IPC: 'IPC (Inflación)', fijo: 'Porcentaje fijo', otro: 'Otro' };
 
   const linkFuente = 'https://arquiler.com/';
 

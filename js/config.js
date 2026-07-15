@@ -20,7 +20,7 @@ export const MONEDAS = ['ARS','USD'];
 
 /* Ajuste de alquiler */
 export const TIPOS_AJUSTE = [
-  { id: 'ICL',  label: 'ICL (Índice Casa Propia)' },
+  { id: 'ICL',  label: 'ICL (Índice de Contratos de Locación)' },
   { id: 'IPC',  label: 'IPC (Inflación)' },
   { id: 'fijo', label: 'Porcentaje fijo' },
   { id: 'otro', label: 'Otro' },
