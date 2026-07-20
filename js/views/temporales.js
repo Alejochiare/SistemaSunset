@@ -200,6 +200,10 @@ function pintarAgenda(el, anio, mes) {
             ${AGENDA_LABELS[id]}
           </div>`;
         }).join('')}
+        <div style="display:flex;align-items:center;gap:.35rem">
+          <span style="width:11px;height:11px;border-radius:3px;background:linear-gradient(to bottom,var(--text-soft) 50%,var(--primary) 50%);display:inline-block"></span>
+          Recambio el mismo día
+        </div>
       </div>
     </div>`;
 
@@ -218,9 +222,22 @@ function pintarAgenda(el, anio, mes) {
   const ultimoDiaMes = `${anio}-${String(mes + 1).padStart(2, '0')}-${String(totalDias).padStart(2, '0')}`;
   const limiteSup = siguienteDiaISO(ultimoDiaMes); // primer día del mes siguiente
 
-  // grilla[propiedadId][día del mes] = { t, isStart, span, continuaAntes, continuaDespues } | null
+  // grilla[propiedadId][día del mes] = { tipo:'normal', t, isStart, span, continuaAntes, continuaDespues }
+  //                                  | { tipo:'turnover', saliente, entrante }  (recambio el mismo día)
+  //                                  | null
   const grilla = {};
   propsTemp.forEach(p => { grilla[p.id] = new Array(totalDias + 1).fill(null); });
+
+  // Mapa de check-outs que caen dentro del mes visible, por propiedad y día,
+  // para detectar cuándo un check-in pisa el mismo día que otra salida.
+  const salidaEnDia = {};
+  temporales.forEach(t => {
+    if (t.estado === 'cancelado') return;
+    if (!t.propiedadId || !grilla[t.propiedadId]) return;
+    if (!t.checkOut) return;
+    if (t.checkOut < primerDiaMes || t.checkOut >= limiteSup) return;
+    salidaEnDia[`${t.propiedadId}|${Number(t.checkOut.slice(8, 10))}`] = t;
+  });
 
   temporales.forEach(t => {
     if (t.estado === 'cancelado') return;
@@ -232,16 +249,25 @@ function pintarAgenda(el, anio, mes) {
     const hasta = t.checkOut > limiteSup ? limiteSup : t.checkOut;
     if (hasta <= desde) return;
 
-    const diaInicio = Number(desde.slice(8, 10));
+    let diaInicio = Number(desde.slice(8, 10));
     const diaFin = hasta === limiteSup ? totalDias : Number(hasta.slice(8, 10)) - 1;
     if (diaFin < diaInicio) return;
 
     const continuaAntes   = t.checkIn < primerDiaMes;
     const continuaDespues = t.checkOut > limiteSup;
-    const span = diaFin - diaInicio + 1;
 
+    // Recambio el mismo día: otro huésped se va justo el día que este entra.
+    // Ese día se pinta mitad y mitad; el resto de la estadía arranca al día siguiente.
+    const saliente = !continuaAntes ? salidaEnDia[`${t.propiedadId}|${diaInicio}`] : null;
+    if (saliente && saliente.id !== t.id) {
+      grilla[t.propiedadId][diaInicio] = { tipo: 'turnover', saliente, entrante: t };
+      diaInicio += 1;
+    }
+    if (diaInicio > diaFin) return; // toda la estadía visible era el día de recambio
+
+    const span = diaFin - diaInicio + 1;
     for (let d = diaInicio; d <= diaFin; d++) {
-      grilla[t.propiedadId][d] = { t, isStart: d === diaInicio, span, continuaAntes, continuaDespues };
+      grilla[t.propiedadId][d] = { tipo: 'normal', t, isStart: d === diaInicio, span, continuaAntes, continuaDespues };
     }
   });
 
@@ -255,6 +281,24 @@ function pintarAgenda(el, anio, mes) {
       if (!celda) {
         return `<td style="padding:.4rem .6rem;border-bottom:1px solid var(--border);border-left:1px solid var(--border);${esHoy ? 'background:color-mix(in srgb,var(--primary) 6%,transparent)' : ''}"></td>`;
       }
+
+      if (celda.tipo === 'turnover') {
+        const estS = estadoInfo(celda.saliente.estado);
+        const estE = estadoInfo(celda.entrante.estado);
+        return `<td style="padding:0;border-bottom:1px solid var(--border);border-left:1px solid var(--border);vertical-align:top">
+          <div style="display:flex;flex-direction:column">
+            <div data-editar-agenda="${celda.saliente.id}" style="padding:.25rem .5rem;cursor:pointer;background:color-mix(in srgb,${estS.color} 20%,transparent);border-bottom:1px dashed var(--border);overflow:hidden;display:flex;justify-content:space-between;align-items:baseline;gap:.4rem">
+              <span style="font-size:.68rem;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">⟵ ${esc(celda.saliente.huesped || '—')}</span>
+              <span style="font-size:.58rem;color:var(--text-soft);flex-shrink:0">Sale</span>
+            </div>
+            <div data-editar-agenda="${celda.entrante.id}" style="padding:.25rem .5rem;cursor:pointer;background:color-mix(in srgb,${estE.color} 20%,transparent);overflow:hidden;display:flex;justify-content:space-between;align-items:baseline;gap:.4rem">
+              <span style="font-size:.68rem;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(celda.entrante.huesped || '—')} ⟶</span>
+              <span style="font-size:.58rem;color:var(--text-soft);flex-shrink:0">Entra</span>
+            </div>
+          </div>
+        </td>`;
+      }
+
       if (!celda.isStart) return ''; // cubierta por el rowspan de una fila anterior
 
       const est = estadoInfo(celda.t.estado);
