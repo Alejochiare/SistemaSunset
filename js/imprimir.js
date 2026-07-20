@@ -511,3 +511,117 @@ export function imprimirFacturaDeuda({ alq, inquilino, propiedad, propietario, c
     ${copia('DUPLICADO')}
   `);
 }
+
+/* ============================================================
+   RECIBO DE ALQUILER TEMPORARIO
+   { temporal, propiedad }
+   ============================================================ */
+export function imprimirReciboTemporal({ temporal, propiedad }) {
+  const ag  = getAgencia();
+  const num = fmtDocNum(nextNum(KEY_NUM_REC));
+  const fecha = new Date().toISOString().slice(0, 10);
+
+  const noches = (() => {
+    if (!temporal.checkIn || !temporal.checkOut) return 0;
+    const a = new Date(temporal.checkIn.slice(0, 10) + 'T00:00:00');
+    const b = new Date(temporal.checkOut.slice(0, 10) + 'T00:00:00');
+    return Math.max(0, Math.round((b - a) / 86400000));
+  })();
+
+  const montoBase      = temporal.precioTotal || (noches * (temporal.precioPorNoche || 0));
+  const montoExtension = temporal.montoExtension || 0;
+  const total = montoBase + montoExtension;
+  const senia = temporal.senia || 0;
+  const resta = total - senia;
+  const aCobrar = senia > 0 ? resta : total;
+
+  const propLabel = propiedad
+    ? (propiedad.nombreTemporal ? `${propiedad.nombreTemporal} — ${propiedad.direccion}` : propiedad.direccion)
+    : '—';
+
+  const copia = (tipoCop) => `
+  <div class="copia">
+    ${headerDoc(ag, 'RECIBO', num, fecha)}
+
+    <div class="banda-concepto">
+      ALQUILER TEMPORARIO
+    </div>
+
+    <!-- Datos del huésped -->
+    <div class="cliente-blk">
+      <div class="dato-fld"><span class="lbl">Sr./Sra.:</span> <strong>${esc(temporal.huesped || '—')}</strong></div>
+      ${temporal.dni ? `<div class="dato-fld"><span class="lbl">DNI:</span> <strong>${esc(temporal.dni)}</strong></div>` : '<div></div>'}
+      ${temporal.telefono ? `<div class="dato-fld"><span class="lbl">Teléfono:</span> ${esc(temporal.telefono)}</div>` : ''}
+      <div class="dato-fld"><span class="lbl">Condición IVA:</span> Consumidor Final</div>
+    </div>
+
+    <!-- Detalle de la estadía -->
+    <div class="contrato-blk">
+      <div class="contrato-titulo">Detalle de la estadía</div>
+      <div class="contrato-grid">
+        <div class="contrato-row" style="grid-column:1/-1"><span class="lbl">Inmueble:</span> <strong>${esc(propLabel)}</strong></div>
+        <div class="contrato-row"><span class="lbl">Check-in:</span> <strong>${fmtFecha(temporal.checkIn)}${temporal.horaCheckIn ? ' · ' + esc(temporal.horaCheckIn) : ''}</strong></div>
+        <div class="contrato-row"><span class="lbl">Check-out:</span> <strong>${fmtFecha(temporal.checkOut)}${temporal.horaCheckOut ? ' · ' + esc(temporal.horaCheckOut) : ''}</strong></div>
+        <div class="contrato-row"><span class="lbl">Noches:</span> <strong>${noches}</strong></div>
+        ${temporal.extension ? `<div class="contrato-row"><span class="lbl">Salida extendida:</span> <strong>Hasta las ${esc(temporal.horaCheckOutExtendido || '—')}</strong></div>` : '<div></div>'}
+      </div>
+    </div>
+
+    <!-- Tabla importe -->
+    <table class="tabla">
+      <thead><tr>
+        <th>Descripción</th>
+        <th>Inmueble</th>
+        <th class="right">Importe</th>
+      </tr></thead>
+      <tbody>
+        <tr>
+          <td>Alquiler temporario (${noches} noche${noches === 1 ? '' : 's'})</td>
+          <td>${esc(propLabel)}</td>
+          <td class="right">${fmtMoneda(montoBase)}</td>
+        </tr>
+        ${montoExtension > 0 ? `
+        <tr>
+          <td>Recargo por estadía extendida</td>
+          <td>${esc(propLabel)}</td>
+          <td class="right">${fmtMoneda(montoExtension)}</td>
+        </tr>` : ''}
+      </tbody>
+    </table>
+
+    <div class="totales">
+      <div class="total-row">
+        <div class="total-label">Total estadía:</div>
+        <div class="total-val">${fmtMoneda(total)}</div>
+      </div>
+      ${senia > 0 ? `
+      <div class="total-row">
+        <div class="total-label">Seña cobrada:</div>
+        <div class="total-val">− ${fmtMoneda(senia)}</div>
+      </div>` : ''}
+      <div class="total-row grand">
+        <div class="total-label">${senia > 0 ? 'SALDO RECIBIDO' : 'TOTAL RECIBIDO'}:</div>
+        <div class="total-val">${fmtMoneda(aCobrar)}</div>
+      </div>
+    </div>
+
+    <!-- Letras -->
+    <div class="letras-blk">
+      <div>
+        <div><span class="lbl">Son pesos:</span> <strong>${enLetras(aCobrar)}</strong></div>
+        ${temporal.notas ? `<div style="margin-top:2px"><span class="lbl">Observaciones:</span> ${esc(temporal.notas)}</div>` : ''}
+      </div>
+    </div>
+
+    <div class="firma-blk">
+      <div class="firma-linea">Firma y aclaración</div>
+      <div class="copia-label">— ${tipoCop} —</div>
+    </div>
+  </div>`;
+
+  abrirVentana('Recibo de Alquiler Temporario', `
+    ${copia('ORIGINAL')}
+    <div class="separador">· · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · ·</div>
+    ${copia('DUPLICADO')}
+  `);
+}

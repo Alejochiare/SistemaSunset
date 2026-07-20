@@ -3,8 +3,10 @@
    ============================================================ */
 import { getState, actions, subscribe } from '../store.js';
 import { icon } from '../config.js';
-import { esc, fmtFechaCorta, fmtMontoInput, valorMonto } from '../lib.js';
+import { esc, fmtFechaCorta, fmtMontoInput, valorMonto, parseFechaLocal } from '../lib.js';
 import { openModal } from '../components/modal.js';
+import { toast } from '../components/toast.js';
+import { imprimirReciboTemporal } from '../imprimir.js';
 
 const ESTADOS = [
   { id: 'confirmado', label: 'Confirmado', color: 'var(--primary)' },
@@ -13,32 +15,94 @@ const ESTADOS = [
   { id: 'cancelado',  label: 'Cancelado',  color: 'var(--danger)' },
 ];
 
+// Etiquetas al estilo agenda de ocupación (Disponible / Reservado / Ocupado)
+const AGENDA_LABELS = { confirmado: 'Reservado', activo: 'Ocupado', completado: 'Completado' };
+
 function estadoInfo(id) { return ESTADOS.find(e => e.id === id) || ESTADOS[0]; }
 
 function noches(t) {
   if (!t.checkIn || !t.checkOut) return 0;
-  const a = new Date(t.checkIn), b = new Date(t.checkOut);
+  const a = parseFechaLocal(t.checkIn), b = parseFechaLocal(t.checkOut);
   return Math.max(0, Math.round((b - a) / 86400000));
 }
 
 function totalReserva(t) {
-  return t.precioTotal || (noches(t) * (t.precioPorNoche || 0));
+  const base = t.precioTotal || (noches(t) * (t.precioPorNoche || 0));
+  return base + (t.montoExtension || 0);
+}
+
+function siguienteDiaISO(fechaStr) {
+  const d = parseFechaLocal(fechaStr);
+  d.setDate(d.getDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
+/** Busca una reserva (no cancelada) de la misma propiedad cuyas fechas se superpongan
+ *  con el rango [checkIn, checkOut) dado. El día de checkOut queda libre (no se cuenta
+ *  como noche ocupada), así que una entrada el mismo día que otra salida NO es conflicto. */
+function reservaSuperpuesta(propiedadId, checkIn, checkOut, excludeId) {
+  const { temporales } = getState();
+  return temporales.find(t =>
+    t.id !== excludeId &&
+    t.propiedadId === propiedadId &&
+    t.estado !== 'cancelado' &&
+    t.checkIn < checkOut && checkIn < t.checkOut
+  );
+}
+
+/** Reserva (no cancelada) de la misma propiedad cuya salida cae justo el mismo día
+ *  que el check-in dado (recambio el mismo día). */
+function salidaMismoDia(propiedadId, checkIn, excludeId) {
+  const { temporales } = getState();
+  return temporales.find(t =>
+    t.id !== excludeId &&
+    t.propiedadId === propiedadId &&
+    t.estado !== 'cancelado' &&
+    t.checkOut === checkIn
+  );
 }
 
 export default function temporales(root) {
   root.innerHTML = `<div class="view" id="vTemp"></div>`;
 
-  let filtro = 'activos'; // 'activos' | 'todos' | 'completados'
+  let vista  = 'agenda'; // 'agenda' | 'lista'
+  let filtro = 'activos'; // 'activos' | 'todos' | 'completados' (solo para vista lista)
+  const hoyD = new Date();
+  let anioAgenda = hoyD.getFullYear();
+  let mesAgenda  = hoyD.getMonth(); // 0-indexado
 
-  const render = () => pintarTemporales(root.querySelector('#vTemp'), filtro);
+  const render = () => pintarTemporales(root.querySelector('#vTemp'), { vista, filtro, anioAgenda, mesAgenda });
   render();
   const unsub = subscribe(render);
 
   root.querySelector('#vTemp').addEventListener('click', e => {
     if (e.target.closest('#btnNuevoTemp')) { abrirFormTemporal(null, render); return; }
 
+    const vt = e.target.closest('[data-vista-temp]');
+    if (vt) { vista = vt.dataset.vistaTemp; render(); return; }
+
     const pf = e.target.closest('[data-filtro-temp]');
     if (pf) { filtro = pf.dataset.filtroTemp; render(); return; }
+
+    if (e.target.closest('#btnMesAnterior')) {
+      mesAgenda--; if (mesAgenda < 0) { mesAgenda = 11; anioAgenda--; }
+      render(); return;
+    }
+    if (e.target.closest('#btnMesSiguiente')) {
+      mesAgenda++; if (mesAgenda > 11) { mesAgenda = 0; anioAgenda++; }
+      render(); return;
+    }
+    if (e.target.closest('#btnMesHoy')) {
+      anioAgenda = hoyD.getFullYear(); mesAgenda = hoyD.getMonth();
+      render(); return;
+    }
+
+    const editarAgenda = e.target.closest('[data-editar-agenda]');
+    if (editarAgenda) {
+      const t = getState().temporales.find(x => x.id === editarAgenda.dataset.editarAgenda);
+      if (t) abrirDetalleTemporal(t, render);
+      return;
+    }
 
     const editar = e.target.closest('[data-editar]');
     if (editar) {
@@ -62,18 +126,9 @@ export default function temporales(root) {
   return unsub;
 }
 
-function pintarTemporales(el, filtro) {
-  const { temporales, propiedades } = getState();
-  const hoy = new Date().toISOString().slice(0, 10);
-
-  const lista = [...temporales].sort((a,b) => (a.checkIn||'').localeCompare(b.checkIn||''));
-
-  const activos     = lista.filter(t => t.estado === 'activo' || t.estado === 'confirmado');
-  const completados = lista.filter(t => t.estado === 'completado' || t.estado === 'cancelado');
-
-  const visible = filtro === 'todos' ? lista : filtro === 'completados' ? completados : activos;
-
-  const counts = { activos: activos.length, completados: completados.length, todos: lista.length };
+function pintarTemporales(el, { vista, filtro, anioAgenda, mesAgenda }) {
+  const { temporales } = getState();
+  const activos = temporales.filter(t => t.estado === 'activo' || t.estado === 'confirmado');
 
   el.innerHTML = `
     <div class="view-head">
@@ -84,18 +139,169 @@ function pintarTemporales(el, filtro) {
       <button class="btn btn-primary" id="btnNuevoTemp">${icon('plus')} Nueva reserva</button>
     </div>
 
-    <!-- PILLS -->
+    <!-- Selector de vista -->
     <div style="display:flex;gap:.5rem;margin-bottom:1.25rem;flex-wrap:wrap">
       ${[
-        { id:'activos',     label:'Activas / Confirmadas' },
-        { id:'completados', label:'Historial' },
-        { id:'todos',       label:'Todas' },
+        { id:'agenda', label:'📅 Agenda' },
+        { id:'lista',  label:'☰ Lista' },
+      ].map(v => {
+        const act = vista === v.id;
+        return `<button data-vista-temp="${v.id}" style="
+          padding:.35rem .9rem;border-radius:999px;font-size:.8rem;font-weight:600;cursor:pointer;border:none;
+          background:${act?'var(--primary)':'var(--surface-2)'};
+          color:${act?'#fff':'var(--text-soft)'};transition:all .15s">
+          ${v.label}
+        </button>`;
+      }).join('')}
+    </div>
+
+    <div id="vTempBody"></div>`;
+
+  const body = el.querySelector('#vTempBody');
+  if (vista === 'agenda') pintarAgenda(body, anioAgenda, mesAgenda);
+  else pintarLista(body, filtro);
+}
+
+/* ── Vista Agenda: grilla de días × propiedades, como un libro de reservas ── */
+function pintarAgenda(el, anio, mes) {
+  const { temporales, propiedades } = getState();
+  const propsTemp = propiedades
+    .filter(p => p.habilitadaTemporal)
+    .sort((a, b) => (a.nombreTemporal || a.direccion || '').localeCompare(b.nombreTemporal || b.direccion || '', 'es', { numeric: true }));
+
+  const meses = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+  const diasSemana = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
+  const hoy = new Date().toISOString().slice(0, 10);
+
+  const header = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;flex-wrap:wrap;gap:.6rem">
+      <div style="display:flex;align-items:center;gap:.5rem">
+        <button class="btn btn-ghost btn-sm" id="btnMesAnterior">‹</button>
+        <div style="font-weight:700;min-width:150px;text-align:center;text-transform:capitalize">${meses[mes]} ${anio}</div>
+        <button class="btn btn-ghost btn-sm" id="btnMesSiguiente">›</button>
+        <button class="btn btn-ghost btn-sm" id="btnMesHoy">Hoy</button>
+      </div>
+      <div style="display:flex;gap:1rem;flex-wrap:wrap;font-size:.78rem">
+        ${['confirmado','activo','completado'].map(id => {
+          const est = estadoInfo(id);
+          return `<div style="display:flex;align-items:center;gap:.35rem">
+            <span style="width:11px;height:11px;border-radius:3px;background:${est.color};display:inline-block"></span>
+            ${AGENDA_LABELS[id]}
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+
+  if (!propsTemp.length) {
+    el.innerHTML = header + `
+    <div class="card" style="padding:2.5rem;text-align:center;color:var(--text-faint)">
+      <div style="font-size:2rem;margin-bottom:.5rem">🏖</div>
+      <div style="font-weight:600;margin-bottom:.25rem">No hay propiedades habilitadas para temporales</div>
+      <div style="font-size:.82rem">Habilitalas desde Propiedades → editar → "¿Qué operaciones querés hacer?" → Alquiler temporal.</div>
+    </div>`;
+    return;
+  }
+
+  const totalDias = new Date(anio, mes + 1, 0).getDate();
+  const primerDiaMes = `${anio}-${String(mes + 1).padStart(2, '0')}-01`;
+  const ultimoDiaMes = `${anio}-${String(mes + 1).padStart(2, '0')}-${String(totalDias).padStart(2, '0')}`;
+  const limiteSup = siguienteDiaISO(ultimoDiaMes); // primer día del mes siguiente
+
+  // grilla[propiedadId][día del mes] = { t, isStart, span, continuaAntes, continuaDespues } | null
+  const grilla = {};
+  propsTemp.forEach(p => { grilla[p.id] = new Array(totalDias + 1).fill(null); });
+
+  temporales.forEach(t => {
+    if (t.estado === 'cancelado') return;
+    if (!t.propiedadId || !grilla[t.propiedadId]) return;
+    if (!t.checkIn || !t.checkOut) return;
+    if (t.checkOut <= primerDiaMes || t.checkIn >= limiteSup) return; // sin superposición con el mes visible
+
+    const desde = t.checkIn < primerDiaMes ? primerDiaMes : t.checkIn;
+    const hasta = t.checkOut > limiteSup ? limiteSup : t.checkOut;
+    if (hasta <= desde) return;
+
+    const diaInicio = Number(desde.slice(8, 10));
+    const diaFin = hasta === limiteSup ? totalDias : Number(hasta.slice(8, 10)) - 1;
+    if (diaFin < diaInicio) return;
+
+    const continuaAntes   = t.checkIn < primerDiaMes;
+    const continuaDespues = t.checkOut > limiteSup;
+    const span = diaFin - diaInicio + 1;
+
+    for (let d = diaInicio; d <= diaFin; d++) {
+      grilla[t.propiedadId][d] = { t, isStart: d === diaInicio, span, continuaAntes, continuaDespues };
+    }
+  });
+
+  const filas = Array.from({ length: totalDias }, (_, i) => i + 1).map(dia => {
+    const fechaStr = `${anio}-${String(mes + 1).padStart(2, '0')}-${String(dia).padStart(2, '0')}`;
+    const esHoy = fechaStr === hoy;
+    const diaSemana = diasSemana[new Date(anio, mes, dia).getDay()];
+
+    const celdas = propsTemp.map(p => {
+      const celda = grilla[p.id][dia];
+      if (!celda) {
+        return `<td style="padding:.4rem .6rem;border-bottom:1px solid var(--border);border-left:1px solid var(--border);${esHoy ? 'background:color-mix(in srgb,var(--primary) 6%,transparent)' : ''}"></td>`;
+      }
+      if (!celda.isStart) return ''; // cubierta por el rowspan de una fila anterior
+
+      const est = estadoInfo(celda.t.estado);
+      return `<td rowspan="${celda.span}" data-editar-agenda="${celda.t.id}"
+          style="padding:.4rem .6rem;border-bottom:1px solid var(--border);border-left:1px solid var(--border);cursor:pointer;vertical-align:top;background:color-mix(in srgb,${est.color} 16%,transparent)">
+        <div style="font-weight:700;font-size:.78rem;line-height:1.25">${celda.continuaAntes ? '⟵ ' : ''}${esc(celda.t.huesped || '—')}${celda.continuaDespues ? ' ⟶' : ''}</div>
+        <div style="font-size:.68rem;color:var(--text-soft);margin-top:.15rem">${AGENDA_LABELS[celda.t.estado] || est.label}</div>
+      </td>`;
+    }).join('');
+
+    return `
+      <tr>
+        <td style="padding:.4rem .6rem .4rem .5rem;border-bottom:1px solid var(--border);border-left:${esHoy ? '3px solid var(--primary)' : '3px solid transparent'};position:sticky;left:0;background:${esHoy ? 'color-mix(in srgb,var(--primary) 10%,var(--surface))' : 'var(--surface)'};font-weight:${esHoy ? 700 : 400};white-space:nowrap;z-index:1">
+          ${String(dia).padStart(2, '0')}/${String(mes + 1).padStart(2, '0')} ${diaSemana}
+        </td>
+        ${celdas}
+      </tr>`;
+  }).join('');
+
+  el.innerHTML = header + `
+    <div style="overflow-x:auto;border:1px solid var(--border);border-radius:var(--r-md)">
+      <table style="width:100%;border-collapse:collapse;font-size:.8rem">
+        <thead>
+          <tr style="background:var(--surface-2)">
+            <th style="padding:.5rem .6rem;text-align:left;border-bottom:1px solid var(--border);position:sticky;left:0;background:var(--surface-2);min-width:90px;z-index:2">Día</th>
+            ${propsTemp.map(p => `<th style="padding:.5rem .6rem;text-align:left;border-bottom:1px solid var(--border);border-left:1px solid var(--border);min-width:130px">${esc(p.nombreTemporal || p.direccion)}</th>`).join('')}
+          </tr>
+        </thead>
+        <tbody>${filas}</tbody>
+      </table>
+    </div>`;
+}
+
+/* ── Vista Lista: tarjetas (comportamiento original) ── */
+function pintarLista(el, filtro) {
+  const { temporales, propiedades } = getState();
+  const hoy = new Date().toISOString().slice(0, 10);
+
+  const lista = [...temporales].sort((a, b) => (a.checkIn || '').localeCompare(b.checkIn || ''));
+
+  const activos     = lista.filter(t => t.estado === 'activo' || t.estado === 'confirmado');
+  const completados = lista.filter(t => t.estado === 'completado' || t.estado === 'cancelado');
+
+  const visible = filtro === 'todos' ? lista : filtro === 'completados' ? completados : activos;
+  const counts = { activos: activos.length, completados: completados.length, todos: lista.length };
+
+  el.innerHTML = `
+    <div style="display:flex;gap:.5rem;margin-bottom:1.25rem;flex-wrap:wrap">
+      ${[
+        { id: 'activos',     label: 'Activas / Confirmadas' },
+        { id: 'completados', label: 'Historial' },
+        { id: 'todos',       label: 'Todas' },
       ].map(p => {
         const activo = filtro === p.id;
         return `<button data-filtro-temp="${p.id}" style="
           padding:.35rem .9rem;border-radius:999px;font-size:.8rem;font-weight:600;cursor:pointer;border:none;
-          background:${activo?'var(--primary)':'var(--surface-2)'};
-          color:${activo?'#fff':'var(--text-soft)'};transition:all .15s">
+          background:${activo ? 'var(--primary)' : 'var(--surface-2)'};
+          color:${activo ? '#fff' : 'var(--text-soft)'};transition:all .15s">
           ${p.label} <span style="opacity:.7">(${counts[p.id]})</span>
         </button>`;
       }).join('')}
@@ -143,20 +349,24 @@ function renderCard(t, propiedades, hoy) {
 
       <!-- Cuerpo -->
       <div style="padding:.9rem 1.1rem;display:flex;flex-direction:column;gap:.55rem">
-        ${prop ? `<div style="font-size:.82rem;color:var(--text-soft)">${icon('home')} ${esc(prop.direccion)}</div>` : ''}
+        ${prop ? `<div style="font-size:.82rem;color:var(--text-soft)">${icon('home')} ${esc(prop.nombreTemporal ? prop.nombreTemporal + ' — ' + prop.direccion : prop.direccion)}</div>` : ''}
 
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:.4rem">
           <div style="background:var(--surface-2);border-radius:var(--r-sm);padding:.5rem .7rem">
             <div style="font-size:.65rem;color:var(--text-soft);text-transform:uppercase;letter-spacing:.04em">Check-in</div>
-            <div style="font-size:.88rem;font-weight:600;margin-top:.1rem">${t.checkIn ? fmtFechaCorta(t.checkIn) : '—'}</div>
+            <div style="font-size:.88rem;font-weight:600;margin-top:.1rem">${t.checkIn ? fmtFechaCorta(t.checkIn) : '—'}${t.horaCheckIn ? ` · ${t.horaCheckIn}` : ''}</div>
           </div>
           <div style="background:var(--surface-2);border-radius:var(--r-sm);padding:.5rem .7rem">
             <div style="font-size:.65rem;color:var(--text-soft);text-transform:uppercase;letter-spacing:.04em">Check-out</div>
-            <div style="font-size:.88rem;font-weight:600;margin-top:.1rem">${t.checkOut ? fmtFechaCorta(t.checkOut) : '—'}</div>
+            <div style="font-size:.88rem;font-weight:600;margin-top:.1rem">${t.checkOut ? fmtFechaCorta(t.checkOut) : '—'}${t.horaCheckOut ? ` · ${t.horaCheckOut}` : ''}</div>
           </div>
         </div>
 
-        ${noct ? `<div style="font-size:.78rem;color:var(--text-soft);text-align:center">${noct} noche${noct!==1?'s':''}</div>` : ''}
+        ${noct ? `<div style="font-size:.78rem;color:var(--text-soft);text-align:center">${noct} noche${noct !== 1 ? 's' : ''}</div>` : ''}
+
+        ${t.extension ? `<div style="font-size:.75rem;background:color-mix(in srgb,var(--warning) 12%,transparent);border:1px solid var(--warning);border-radius:var(--r-sm);padding:.4rem .6rem">
+          🕐 Estadía extendida hasta las ${esc(t.horaCheckOutExtendido || '—')}${t.montoExtension ? ` · +$${Number(t.montoExtension).toLocaleString('es-AR')}` : ''}
+        </div>` : ''}
 
         <!-- Precio -->
         <div style="border-top:1px solid var(--border);padding-top:.55rem;display:flex;justify-content:space-between;align-items:center">
@@ -185,6 +395,68 @@ function renderCard(t, propiedades, hoy) {
     </div>`;
 }
 
+/* ---- Detalle del contrato (se abre al tocar una celda de la agenda) ---- */
+function abrirDetalleTemporal(t, onDone) {
+  const { propiedades } = getState();
+  const prop  = propiedades.find(p => p.id === t.propiedadId);
+  const est   = estadoInfo(t.estado);
+  const noct  = noches(t);
+  const total = totalReserva(t);
+  const senia = t.senia || 0;
+  const resta = total - senia;
+
+  const fila = (label, val) => val ? `
+    <div style="display:flex;justify-content:space-between;gap:1rem;padding:.4rem 0;border-bottom:1px solid var(--border);font-size:.85rem">
+      <span style="color:var(--text-soft)">${label}</span><span style="font-weight:600;text-align:right">${val}</span>
+    </div>` : '';
+
+  openModal({
+    title: 'Detalle de la reserva',
+    size: 'lg',
+    bodyHTML: `
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:1.1rem">
+        <div>
+          <div style="font-size:1.2rem;font-weight:700">${esc(t.huesped || '—')}</div>
+          <div style="font-size:.78rem;font-weight:700;color:${est.color};text-transform:uppercase;letter-spacing:.05em;margin-top:.15rem">${est.label}</div>
+        </div>
+      </div>
+
+      <h3 class="form-section-title">Huésped</h3>
+      ${fila('DNI', t.dni ? esc(t.dni) : null)}
+      ${fila('Teléfono', t.telefono ? esc(t.telefono) : null)}
+      ${!t.dni && !t.telefono ? `<div style="font-size:.8rem;color:var(--text-faint)">Sin datos adicionales</div>` : ''}
+
+      <h3 class="form-section-title" style="margin-top:1.1rem">Propiedad y fechas</h3>
+      ${fila('Propiedad', prop ? esc(prop.nombreTemporal ? `${prop.nombreTemporal} — ${prop.direccion}` : prop.direccion) : '—')}
+      ${fila('Check-in', `${t.checkIn ? fmtFechaCorta(t.checkIn) : '—'}${t.horaCheckIn ? ' · ' + esc(t.horaCheckIn) : ''}`)}
+      ${fila('Check-out', `${t.checkOut ? fmtFechaCorta(t.checkOut) : '—'}${t.horaCheckOut ? ' · ' + esc(t.horaCheckOut) : ''}`)}
+      ${fila('Noches', noct || null)}
+      ${t.extension ? fila('Estadía extendida', `Hasta las ${esc(t.horaCheckOutExtendido || '—')}${t.montoExtension ? ' · +$' + Number(t.montoExtension).toLocaleString('es-AR') : ''}`) : ''}
+
+      <h3 class="form-section-title" style="margin-top:1.1rem">Precios</h3>
+      ${fila('Precio por noche', t.precioPorNoche ? '$' + Number(t.precioPorNoche).toLocaleString('es-AR') : null)}
+      ${fila('Total', total ? '$' + total.toLocaleString('es-AR') : '—')}
+      ${fila('Seña cobrada', senia ? '$' + senia.toLocaleString('es-AR') : null)}
+      ${fila('Resta cobrar', resta > 0 ? '$' + resta.toLocaleString('es-AR') : null)}
+
+      ${t.notas ? `<h3 class="form-section-title" style="margin-top:1.1rem">Notas</h3><div style="font-size:.85rem;color:var(--text-soft);font-style:italic">${esc(t.notas)}</div>` : ''}
+    `,
+    footerHTML: `
+      <button class="btn btn-ghost" data-close>Cerrar</button>
+      <button class="btn btn-ghost" id="btnImprimirRecTemp">${icon('file')} Imprimir recibo</button>
+      <button class="btn btn-primary" id="btnEditarDesdeDetalle">${icon('edit')} Editar contrato</button>`,
+    onMount(ctx) {
+      ctx.overlay.querySelector('#btnImprimirRecTemp').addEventListener('click', () => {
+        imprimirReciboTemporal({ temporal: t, propiedad: prop });
+      });
+      ctx.overlay.querySelector('#btnEditarDesdeDetalle').addEventListener('click', () => {
+        ctx.close();
+        abrirFormTemporal(t, onDone);
+      });
+    },
+  });
+}
+
 /* ---- Formulario ---- */
 function abrirFormTemporal(t, onDone) {
   const ed  = !!t; t = t || {};
@@ -194,6 +466,7 @@ function abrirFormTemporal(t, onDone) {
 
   openModal({
     title: ed ? 'Editar reserva' : 'Nueva reserva temporal',
+    size: 'lg',
     bodyHTML: `
       <form id="fTemp">
         <h3 class="form-section-title">Datos del huésped</h3>
@@ -219,7 +492,7 @@ function abrirFormTemporal(t, onDone) {
             <select name="propiedadId">
               <option value="">— Sin asignar —</option>
               ${propsTemp.length
-                ? propsTemp.map(p => `<option value="${p.id}" ${t.propiedadId===p.id?'selected':''}>${esc(p.direccion)}</option>`).join('')
+                ? propsTemp.map(p => `<option value="${p.id}" ${t.propiedadId===p.id?'selected':''}>${esc(p.nombreTemporal ? p.nombreTemporal + ' — ' + p.direccion : p.direccion)}</option>`).join('')
                 : `<option disabled>No hay propiedades habilitadas para temporales</option>`}
             </select>
             ${!propsTemp.length ? `<p style="font-size:.75rem;color:var(--warning);margin-top:.3rem">Habilitá propiedades para temporales desde la sección Propiedades → editar → Tipo de uso.</p>` : ''}
@@ -231,6 +504,36 @@ function abrirFormTemporal(t, onDone) {
           <div class="form-group">
             <label>Check-out <span class="req">*</span></label>
             <input name="checkOut" id="tCheckOut" type="date" value="${t.checkOut||''}">
+          </div>
+        </div>
+        <div id="warnSuperposicion" style="display:none;margin-top:.6rem;padding:.6rem .8rem;border-radius:var(--r-sm);background:color-mix(in srgb,var(--danger) 12%,transparent);border:1px solid var(--danger);font-size:.8rem;color:var(--danger)"></div>
+
+        <h3 class="form-section-title" style="margin-top:1.25rem">Horarios</h3>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Hora de check-in</label>
+            <input name="horaCheckIn" type="time" value="${t.horaCheckIn || '12:00'}">
+          </div>
+          <div class="form-group">
+            <label>Hora de check-out</label>
+            <input name="horaCheckOut" type="time" value="${t.horaCheckOut || '09:30'}">
+          </div>
+        </div>
+
+        <div style="margin-top:.75rem;padding:.85rem 1rem;border-radius:var(--r-md);background:var(--surface-2);border:1px solid var(--border)">
+          <label style="display:flex;align-items:center;gap:.6rem;cursor:pointer;font-weight:600">
+            <input type="checkbox" id="chkExtension" ${t.extension ? 'checked' : ''} style="width:16px;height:16px;cursor:pointer">
+            🕐 Estadía extendida (medio día adicional)
+          </label>
+          <div id="blkExtension" style="display:${t.extension ? 'grid' : 'none'};grid-template-columns:1fr 1fr;gap:.6rem;margin-top:.65rem">
+            <div class="form-group" style="margin:0">
+              <label>Hasta qué hora</label>
+              <input name="horaCheckOutExtendido" type="time" value="${t.horaCheckOutExtendido || '18:00'}">
+            </div>
+            <div class="form-group" style="margin:0">
+              <label>Monto cobrado $</label>
+              <input name="montoExtension" type="text" inputmode="numeric" class="input-monto" value="${fmtMontoInput(t.montoExtension)}">
+            </div>
           </div>
         </div>
 
@@ -270,7 +573,7 @@ function abrirFormTemporal(t, onDone) {
         const co  = q('#tCheckOut').value;
         const ppn = valorMonto(q('#tPPN').value);
         if (ci && co && co > ci) {
-          const n = Math.round((new Date(co) - new Date(ci)) / 86400000);
+          const n = Math.round((parseFechaLocal(co) - parseFechaLocal(ci)) / 86400000);
           q('#tNoches').value = n;
           if (ppn) q('#tTotal').value = fmtMontoInput(n * ppn);
         } else {
@@ -278,21 +581,72 @@ function abrirFormTemporal(t, onDone) {
         }
       };
 
-      q('#tCheckIn').addEventListener('change', recalcular);
-      q('#tCheckOut').addEventListener('change', recalcular);
+      // Aviso en vivo si la propiedad elegida todavía está ocupada en esas fechas
+      const avisar = (texto, tipo) => {
+        const warn = q('#warnSuperposicion');
+        const esWarning = tipo === 'warning';
+        warn.style.background = `color-mix(in srgb,var(--${esWarning ? 'warning' : 'danger'}) 12%,transparent)`;
+        warn.style.borderColor = `var(--${esWarning ? 'warning' : 'danger'})`;
+        warn.style.color = `var(--${esWarning ? 'warning' : 'danger'})`;
+        warn.textContent = texto;
+        warn.style.display = '';
+      };
+
+      const chequearDisponibilidad = () => {
+        const warn = q('#warnSuperposicion');
+        const propiedadId = q('[name="propiedadId"]').value;
+        const ci = q('#tCheckIn').value;
+        const co = q('#tCheckOut').value;
+        if (propiedadId && ci && co && co > ci) {
+          // Conflicto real: se pisan las fechas (el día de checkOut queda libre, no cuenta)
+          const conflicto = reservaSuperpuesta(propiedadId, ci, co, ed ? t.id : null);
+          if (conflicto) {
+            avisar(`⚠ Esa propiedad todavía está ocupada/reservada por ${conflicto.huesped || 'otro huésped'} del ${fmtFechaCorta(conflicto.checkIn)} al ${fmtFechaCorta(conflicto.checkOut)}. Elegí otras fechas.`, 'danger');
+            return;
+          }
+          // Recambio el mismo día: no es conflicto, pero si el que se va tiene estadía
+          // extendida hay que confirmar que el horario de entrada no se pise con el de salida.
+          const salida = salidaMismoDia(propiedadId, ci, ed ? t.id : null);
+          if (salida && salida.extension) {
+            const horaEntrada = q('[name="horaCheckIn"]').value || '12:00';
+            avisar(`ℹ️ ${salida.huesped || 'El huésped anterior'} se va ese mismo día con estadía extendida hasta las ${salida.horaCheckOutExtendido || '—'}. Confirmá que la entrada de este huésped (${horaEntrada}) sea después de esa hora.`, 'warning');
+            return;
+          }
+        }
+        warn.style.display = 'none';
+      };
+
+      q('#tCheckIn').addEventListener('change', () => { recalcular(); chequearDisponibilidad(); });
+      q('#tCheckOut').addEventListener('change', () => { recalcular(); chequearDisponibilidad(); });
       q('#tPPN').addEventListener('input', recalcular);
+      q('[name="propiedadId"]').addEventListener('change', chequearDisponibilidad);
+      q('[name="horaCheckIn"]').addEventListener('change', chequearDisponibilidad);
       recalcular();
+      chequearDisponibilidad();
+
+      q('#chkExtension').addEventListener('change', (e) => {
+        q('#blkExtension').style.display = e.target.checked ? 'grid' : 'none';
+      });
 
       q('#btnGuardarTemp').addEventListener('click', async () => {
         const get = n => (q(`[name="${n}"]`)?.value || '').trim();
         const num = n => valorMonto(q(`[name="${n}"]`)?.value);
 
-        const huesped  = get('huesped');
-        const checkIn  = get('checkIn');
-        const checkOut = get('checkOut');
+        const huesped    = get('huesped');
+        const checkIn    = get('checkIn');
+        const checkOut   = get('checkOut');
+        const propiedadId = get('propiedadId');
         if (!huesped)             { q('[name="huesped"]').focus(); return; }
         if (!checkIn || !checkOut){ return; }
         if (checkOut <= checkIn)  { alert('El check-out debe ser posterior al check-in'); return; }
+
+        if (propiedadId) {
+          const conflicto = reservaSuperpuesta(propiedadId, checkIn, checkOut, ed ? t.id : null);
+          if (conflicto) {
+            toast(`Esa propiedad todavía está ocupada/reservada por ${conflicto.huesped || 'otro huésped'} del ${fmtFechaCorta(conflicto.checkIn)} al ${fmtFechaCorta(conflicto.checkOut)}`, { tipo: 'danger' });
+            return;
+          }
+        }
 
         // Estado se calcula automáticamente por fechas
         const hoy = new Date().toISOString().slice(0, 10);
@@ -300,11 +654,18 @@ function abrirFormTemporal(t, onDone) {
         if (checkIn <= hoy && checkOut > hoy) estado = 'activo';
         else if (checkOut <= hoy)             estado = 'completado';
 
+        const extension = q('#chkExtension').checked;
+
         const data = {
           huesped, checkIn, checkOut,
           dni:           get('dni') || null,
           telefono:      get('telefono') || null,
-          propiedadId:   get('propiedadId') || null,
+          propiedadId:   propiedadId || null,
+          horaCheckIn:   get('horaCheckIn') || null,
+          horaCheckOut:  get('horaCheckOut') || null,
+          extension,
+          horaCheckOutExtendido: extension ? (get('horaCheckOutExtendido') || null) : null,
+          montoExtension:        extension ? (num('montoExtension') || null) : null,
           precioPorNoche: num('precioPorNoche') || null,
           precioTotal:   num('precioTotal') || null,
           senia:         num('senia') || null,

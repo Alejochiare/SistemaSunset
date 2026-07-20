@@ -435,12 +435,19 @@ export function openPropForm(prop = null, onDone) {
             </span>
           </label>
           <label style="display:flex;align-items:center;gap:.8rem;cursor:pointer;font-size:.92rem;font-weight:500">
-            <input type="checkbox" name="habilitadaTemporal" value="1" ${prop.habilitadaTemporal?'checked':''} style="width:18px;height:18px;cursor:pointer">
+            <input type="checkbox" name="habilitadaTemporal" id="chkHabTemporal" value="1" ${prop.habilitadaTemporal?'checked':''} style="width:18px;height:18px;cursor:pointer">
             <span>
               <div style="font-weight:600;color:var(--text)">🏖️ Alquiler temporal</div>
               <small style="color:var(--text-soft);display:block;margin-top:.15rem">Alquileres por noche/semana</small>
             </span>
           </label>
+          <div id="blkNombreTemporal" style="display:${prop.habilitadaTemporal?'block':'none'};padding-left:2.6rem">
+            <div class="form-group" style="margin:0;max-width:260px">
+              <label>Nombre corto (para la agenda)</label>
+              <input name="nombreTemporal" value="${esc(prop.nombreTemporal||'')}" placeholder="Ej: Depto 1">
+              <small class="text-xs text-soft" style="margin-top:.25rem;display:block">Así se identifica esta propiedad en la agenda de temporales.</small>
+            </div>
+          </div>
           <label style="display:flex;align-items:center;gap:.8rem;cursor:pointer;font-size:.92rem;font-weight:500">
             <input type="checkbox" name="habilitadaVenta" value="1" ${prop.habilitadaVenta?'checked':''} style="width:18px;height:18px;cursor:pointer">
             <span>
@@ -494,6 +501,11 @@ export function openPropForm(prop = null, onDone) {
       </form>`,
     footerHTML: `<button class="btn btn-ghost" data-close>Cancelar</button><button class="btn btn-primary" id="saveProp">${ed?'Guardar cambios':'Crear propiedad'}</button>`,
     onMount(ctx) {
+      // Mostrar/ocultar el nombre corto según si es alquiler temporal
+      ctx.overlay.querySelector('#chkHabTemporal').addEventListener('change', (e) => {
+        ctx.overlay.querySelector('#blkNombreTemporal').style.display = e.target.checked ? 'block' : 'none';
+      });
+
       // Buscador de propietario
       const searchInput  = ctx.overlay.querySelector('#propOwnerSearch');
       const hiddenId     = ctx.overlay.querySelector('[name="propietarioId"]');
