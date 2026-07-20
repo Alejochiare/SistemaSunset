@@ -87,6 +87,7 @@ export const actions = {
   async createTemporal(d)      { await api.createTemporal(d); await refresh(); },
   async updateTemporal(id, p)  { await api.updateTemporal(id, p); await refresh(); },
   async deleteTemporal(id)     { await api.deleteTemporal(id); await refresh(); },
+  async registrarCobroRestoTemporal(id, pago) { await api.registrarCobroRestoTemporal(id, pago); await refresh(); },
 
   /* Liquidaciones */
   async createLiquidacion(d)      { const r = await api.createLiquidacion(d); await refresh(); return r; },

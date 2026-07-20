@@ -18,6 +18,8 @@ const ESTADOS = [
 // Etiquetas al estilo agenda de ocupación (Disponible / Reservado / Ocupado)
 const AGENDA_LABELS = { confirmado: 'Reservado', activo: 'Ocupado', completado: 'Completado' };
 
+const METODOS_PAGO = ['Efectivo', 'Transferencia', 'Cheque', 'Débito', 'Otro'];
+
 function estadoInfo(id) { return ESTADOS.find(e => e.id === id) || ESTADOS[0]; }
 
 function noches(t) {
@@ -29,6 +31,15 @@ function noches(t) {
 function totalReserva(t) {
   const base = t.precioTotal || (noches(t) * (t.precioPorNoche || 0));
   return base + (t.montoExtension || 0);
+}
+
+/** Saldo de una reserva: total, seña, lo ya cobrado del resto (vía Caja) y lo que falta cobrar. */
+function saldoReserva(t) {
+  const total = totalReserva(t);
+  const senia = t.senia || 0;
+  const restoCobrado = t.restoCajaRegistrado || 0;
+  const resta = Math.max(0, Math.round((total - senia - restoCobrado) * 100) / 100);
+  return { total, senia, restoCobrado, resta };
 }
 
 function siguienteDiaISO(fechaStr) {
@@ -322,9 +333,7 @@ function renderCard(t, propiedades, hoy) {
   const prop  = propiedades.find(p => p.id === t.propiedadId);
   const est   = estadoInfo(t.estado);
   const noct  = noches(t);
-  const total = totalReserva(t);
-  const senia = t.senia || 0;
-  const resta = total - senia;
+  const { total, senia, resta } = saldoReserva(t);
 
   const checkInPasado = t.checkIn && t.checkIn <= hoy;
   const checkOutPasado = t.checkOut && t.checkOut <= hoy;
@@ -401,9 +410,7 @@ function abrirDetalleTemporal(t, onDone) {
   const prop  = propiedades.find(p => p.id === t.propiedadId);
   const est   = estadoInfo(t.estado);
   const noct  = noches(t);
-  const total = totalReserva(t);
-  const senia = t.senia || 0;
-  const resta = total - senia;
+  const { total, senia, restoCobrado, resta } = saldoReserva(t);
 
   const fila = (label, val) => val ? `
     <div style="display:flex;justify-content:space-between;gap:1rem;padding:.4rem 0;border-bottom:1px solid var(--border);font-size:.85rem">
@@ -436,7 +443,8 @@ function abrirDetalleTemporal(t, onDone) {
       <h3 class="form-section-title" style="margin-top:1.1rem">Precios</h3>
       ${fila('Precio por noche', t.precioPorNoche ? '$' + Number(t.precioPorNoche).toLocaleString('es-AR') : null)}
       ${fila('Total', total ? '$' + total.toLocaleString('es-AR') : '—')}
-      ${fila('Seña cobrada', senia ? '$' + senia.toLocaleString('es-AR') : null)}
+      ${fila('Seña cobrada', senia ? '$' + senia.toLocaleString('es-AR') + ' (en Caja)' : null)}
+      ${fila('Resto cobrado', restoCobrado ? '$' + restoCobrado.toLocaleString('es-AR') + ' (en Caja)' : null)}
       ${fila('Resta cobrar', resta > 0 ? '$' + resta.toLocaleString('es-AR') : null)}
 
       ${t.notas ? `<h3 class="form-section-title" style="margin-top:1.1rem">Notas</h3><div style="font-size:.85rem;color:var(--text-soft);font-style:italic">${esc(t.notas)}</div>` : ''}
@@ -444,14 +452,62 @@ function abrirDetalleTemporal(t, onDone) {
     footerHTML: `
       <button class="btn btn-ghost" data-close>Cerrar</button>
       <button class="btn btn-ghost" id="btnImprimirRecTemp">${icon('file')} Imprimir recibo</button>
+      ${resta > 0 ? `<button class="btn btn-ghost" id="btnCobrarResto" style="color:var(--success)">💰 Cobrar resto</button>` : ''}
       <button class="btn btn-primary" id="btnEditarDesdeDetalle">${icon('edit')} Editar contrato</button>`,
     onMount(ctx) {
       ctx.overlay.querySelector('#btnImprimirRecTemp').addEventListener('click', () => {
         imprimirReciboTemporal({ temporal: t, propiedad: prop });
       });
+      ctx.overlay.querySelector('#btnCobrarResto')?.addEventListener('click', () => {
+        ctx.close();
+        abrirCobroRestoTemporal(t, onDone);
+      });
       ctx.overlay.querySelector('#btnEditarDesdeDetalle').addEventListener('click', () => {
         ctx.close();
         abrirFormTemporal(t, onDone);
+      });
+    },
+  });
+}
+
+/* ---- Cobro del resto (saldo pendiente) → va directo a Caja ---- */
+function abrirCobroRestoTemporal(t, onDone) {
+  const { resta } = saldoReserva(t);
+
+  openModal({
+    title: 'Registrar cobro del resto',
+    bodyHTML: `
+      <form id="fResto">
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Monto a cobrar $</label>
+            <input name="monto" type="text" inputmode="numeric" class="input-monto" value="${fmtMontoInput(resta)}" style="font-weight:700;font-size:1.05rem" autofocus>
+          </div>
+          <div class="form-group">
+            <label>Forma de pago</label>
+            <select name="metodoPago">${METODOS_PAGO.map(m => `<option value="${m}">${m}</option>`).join('')}</select>
+          </div>
+          <div class="form-group full">
+            <label>Referencia</label>
+            <input name="referencia" placeholder="Opcional">
+          </div>
+        </div>
+        <p style="font-size:.75rem;color:var(--text-soft)">Este cobro se registra directo en Control de caja.</p>
+      </form>`,
+    footerHTML: `
+      <button class="btn btn-ghost" data-close>Cancelar</button>
+      <button class="btn btn-primary" id="btnConfirmarResto">Registrar cobro</button>`,
+    onMount({ overlay, close }) {
+      const f = overlay.querySelector('#fResto');
+      overlay.querySelector('#btnConfirmarResto').addEventListener('click', async () => {
+        const monto = valorMonto(f.monto.value);
+        if (!monto || monto <= 0) { toast('Indicá un monto válido', { tipo: 'warning' }); return; }
+        await actions.registrarCobroRestoTemporal(t.id, {
+          monto, metodoPago: f.metodoPago.value, referencia: f.referencia.value || null,
+        });
+        toast('Cobro registrado en Caja');
+        close();
+        onDone?.();
       });
     },
   });
@@ -555,7 +611,12 @@ function abrirFormTemporal(t, onDone) {
             <label>Seña cobrada $</label>
             <input name="senia" type="text" inputmode="numeric" class="input-monto" value="${fmtMontoInput(t.senia)}">
           </div>
+          <div class="form-group">
+            <label>Forma de pago de la seña</label>
+            <select name="metodoPagoSenia">${METODOS_PAGO.map(m => `<option value="${m}" ${(t.metodoPagoSenia||'Efectivo')===m?'selected':''}>${m}</option>`).join('')}</select>
+          </div>
         </div>
+        <p style="font-size:.75rem;color:var(--text-soft);margin-top:-.4rem">La seña se manda sola a Control de caja al guardar. El resto se registra después, desde el detalle de la reserva.</p>
 
         <h3 class="form-section-title" style="margin-top:1.25rem">Notas</h3>
         <div class="form-group">
@@ -669,6 +730,7 @@ function abrirFormTemporal(t, onDone) {
           precioPorNoche: num('precioPorNoche') || null,
           precioTotal:   num('precioTotal') || null,
           senia:         num('senia') || null,
+          metodoPagoSenia: get('metodoPagoSenia') || 'Efectivo',
           estado,
           notas:         get('notas') || null,
         };

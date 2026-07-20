@@ -86,6 +86,29 @@ function crearMovimientosPago(db, { pagos, monto, metodoPago, referencia, nota, 
   }));
 }
 
+/** Registra en caja la diferencia entre la seña actual de una reserva temporal y lo que
+ *  ya se había registrado antes (para no duplicar el ingreso si se edita el contrato). */
+function registrarSeniaCajaTemporal(db, t) {
+  const senia = Number(t.senia || 0);
+  const yaRegistrado = Number(t.senaCajaRegistrada || 0);
+  const delta = Math.round((senia - yaRegistrado) * 100) / 100;
+  if (delta > 0) {
+    const prop = db.propiedades.find(p => p.id === t.propiedadId);
+    const mov = crearMovimientoCaja(db, {
+      tipo: 'ingreso',
+      concepto: `Seña alquiler temporario • ${t.huesped || 'Huésped'} • ${prop ? (prop.nombreTemporal || prop.direccion) : 'Propiedad'}`.trim(),
+      monto: delta,
+      metodoPago: t.metodoPagoSenia || 'Efectivo',
+      fecha: hoyISO(),
+      origen: 'temporal-senia',
+      refTipo: 'temporal',
+      refId: t.id,
+    });
+    t.senaCajaMovimientoIds = [...(t.senaCajaMovimientoIds || []), mov.id];
+  }
+  t.senaCajaRegistrada = senia;
+}
+
 /** Si el cobro trae comisiÃ³n inicial pendiente de cobrar y ya estÃ¡ pagado,
  *  genera el ingreso de caja correspondiente y marca el contrato como cobrada. */
 function procesarComisionInicial(db, a, c) {
@@ -433,20 +456,47 @@ export const api = {
   /* ---- TEMPORALES ---- */
   async createTemporal(data) {
     if (!_db.temporales) _db.temporales = [];
-    const t = { id: uid('tmp'), fechaAlta: new Date().toISOString(), estado: 'confirmado', ...data };
+    const t = { id: uid('tmp'), fechaAlta: new Date().toISOString(), estado: 'confirmado', senaCajaRegistrada: 0, restoCajaRegistrado: 0, ...data };
     _db.temporales.push(t);
+    registrarSeniaCajaTemporal(_db, t);
     persist(_db);
     return delay(t);
   },
   async updateTemporal(id, patch) {
     const i = _db.temporales.findIndex(t => t.id === id);
-    if (i !== -1) { _db.temporales[i] = { ..._db.temporales[i], ...patch }; persist(_db); }
+    if (i !== -1) {
+      _db.temporales[i] = { ..._db.temporales[i], ...patch };
+      registrarSeniaCajaTemporal(_db, _db.temporales[i]);
+      persist(_db);
+    }
     return delay(null);
   },
   async deleteTemporal(id) {
     _db.temporales = _db.temporales.filter(t => t.id !== id);
     persist(_db);
     return delay(null);
+  },
+  /** Registra en caja el cobro del saldo restante de una reserva temporal
+   *  (lo que no entró como seña), por ejemplo al check-in o check-out. */
+  async registrarCobroRestoTemporal(id, { monto, metodoPago, referencia }) {
+    const t = _db.temporales.find(x => x.id === id);
+    if (!t) return delay(null);
+    const prop = _db.propiedades.find(p => p.id === t.propiedadId);
+    const mov = crearMovimientoCaja(_db, {
+      tipo: 'ingreso',
+      concepto: `Saldo alquiler temporario • ${t.huesped || 'Huésped'} • ${prop ? (prop.nombreTemporal || prop.direccion) : 'Propiedad'}`.trim(),
+      monto: Number(monto || 0),
+      metodoPago: metodoPago || 'Efectivo',
+      nota: referencia || '',
+      fecha: hoyISO(),
+      origen: 'temporal-resto',
+      refTipo: 'temporal',
+      refId: t.id,
+    });
+    t.restoCajaRegistrado = Math.round(((Number(t.restoCajaRegistrado) || 0) + Number(monto || 0)) * 100) / 100;
+    t.restoCajaMovimientoIds = [...(t.restoCajaMovimientoIds || []), mov.id];
+    persist(_db);
+    return delay(structuredClone(t));
   },
 
   /* ---- LIQUIDACIONES ---- */

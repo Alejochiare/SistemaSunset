@@ -532,8 +532,10 @@ export function imprimirReciboTemporal({ temporal, propiedad }) {
   const montoExtension = temporal.montoExtension || 0;
   const total = montoBase + montoExtension;
   const senia = temporal.senia || 0;
-  const resta = total - senia;
-  const aCobrar = senia > 0 ? resta : total;
+  const restoCobrado = temporal.restoCajaRegistrado || 0;
+  const totalCobrado = senia + restoCobrado;
+  const resta = Math.max(0, Math.round((total - totalCobrado) * 100) / 100);
+  const aCobrar = resta > 0 ? resta : totalCobrado;
 
   const propLabel = propiedad
     ? (propiedad.nombreTemporal ? `${propiedad.nombreTemporal} — ${propiedad.direccion}` : propiedad.direccion)
@@ -599,8 +601,13 @@ export function imprimirReciboTemporal({ temporal, propiedad }) {
         <div class="total-label">Seña cobrada:</div>
         <div class="total-val">− ${fmtMoneda(senia)}</div>
       </div>` : ''}
+      ${restoCobrado > 0 ? `
+      <div class="total-row">
+        <div class="total-label">Resto cobrado:</div>
+        <div class="total-val">− ${fmtMoneda(restoCobrado)}</div>
+      </div>` : ''}
       <div class="total-row grand">
-        <div class="total-label">${senia > 0 ? 'SALDO RECIBIDO' : 'TOTAL RECIBIDO'}:</div>
+        <div class="total-label">${resta > 0 ? 'SALDO PENDIENTE' : 'TOTAL RECIBIDO'}:</div>
         <div class="total-val">${fmtMoneda(aCobrar)}</div>
       </div>
     </div>
