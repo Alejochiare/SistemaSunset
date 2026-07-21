@@ -39,11 +39,11 @@ function pagosYaLiquidados() {
   return { senas, restos };
 }
 
-/** Calcula el reparto teórico (según el % de cada propiedad, extensión 100%
- *  inmobiliaria) contra lo que realmente entró a cada cuenta (seña + pagos de
- *  resto), agrupando TODAS las propiedades temporales de un mismo dueño en un
- *  solo cálculo (una sola liquidación), para un mes dado. Deja afuera lo que
- *  ya haya sido liquidado antes. */
+/** Calcula el reparto teórico (según el % de cada propiedad, aplicado por igual
+ *  al alquiler y a la estadía extendida) contra lo que realmente entró a cada
+ *  cuenta (seña + pagos de resto), agrupando TODAS las propiedades temporales
+ *  de un mismo dueño en un solo cálculo (una sola liquidación), para un mes
+ *  dado. Deja afuera lo que ya haya sido liquidado antes. */
 function calcularLiquidacionTemporal(propietarioId, mes) {
   const { temporales, propiedades } = getState();
   const propsDelDueno = propiedades.filter(p => p.propietarioId === propietarioId && p.habilitadaTemporal);
@@ -83,8 +83,9 @@ function calcularLiquidacionTemporal(propietarioId, mes) {
         const x = e.monto * fracExt;
         totalBase += b;
         totalExtension += x;
-        teoricoDueño += b * (pctDueñoProp / 100);
-        teoricoGaston += b * (pctGastonProp / 100) + x;
+        // La estadía extendida se reparte igual que el alquiler (mismo % del dueño de la propiedad).
+        teoricoDueño += e.monto * (pctDueñoProp / 100);
+        teoricoGaston += e.monto * (pctGastonProp / 100);
         if (e.cuenta === 'gaston') realGaston += e.monto; else realPropietario += e.monto;
         if (e.tipo === 'senia') senasIncluidas.push(e.refId); else pagosRestoIncluidos.push(e.refId);
       });
@@ -95,9 +96,10 @@ function calcularLiquidacionTemporal(propietarioId, mes) {
 
   // diffBase > 0: a Gastón le entró de más (le corresponde transferirle al dueño esa diferencia)
   const diffBase = Math.round((realGaston - teoricoGaston) * 100) / 100;
-  // % efectivo (ponderado) sobre el total de alquiler base, para mostrar y para prorratear gastos
-  // cuando las propiedades del mismo dueño tuvieran distinto % pactado.
-  const pctDueño = totalBase > 0 ? Math.round((teoricoDueño / totalBase) * 10000) / 100 : (propsDelDueno[0]?.pctPropietarioTemporal ?? 70);
+  // % efectivo (ponderado) sobre el total cobrado (alquiler + extensión), para mostrar y
+  // para prorratear gastos cuando las propiedades del mismo dueño tuvieran distinto % pactado.
+  const totalGeneral = totalBase + totalExtension;
+  const pctDueño = totalGeneral > 0 ? Math.round((teoricoDueño / totalGeneral) * 10000) / 100 : (propsDelDueno[0]?.pctPropietarioTemporal ?? 70);
   const pctGaston = 100 - pctDueño;
 
   return {
@@ -1095,7 +1097,7 @@ export function abrirLiquidacionTemporalModal(onDone, preselectPropietarioId) {
               ${esc(own?.nombre || '—')} · ${calc.propiedades.length} propiedad${calc.propiedades.length !== 1 ? 'es' : ''}: ${esc(nombresProps || '—')}
             </div>
             <div style="font-size:.72rem;color:var(--text-soft);text-transform:uppercase;letter-spacing:.04em;margin-bottom:.6rem">
-              Reparto: ${calc.pctDueño}% dueño / ${calc.pctGaston}% inmobiliaria · la estadía extendida es 100% inmobiliaria
+              Reparto: ${calc.pctDueño}% dueño / ${calc.pctGaston}% inmobiliaria · incluye la estadía extendida (mismo reparto)
             </div>
             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:.75rem">
               ${[

@@ -673,9 +673,9 @@ export function imprimirLiquidacionTemporal({ liquidacion: l, propiedades = [], 
       </tr></thead>
       <tbody>
         <tr><td>Alquiler cobrado en el período</td><td class="right">${fmtMoneda(l.totalBase)}</td></tr>
-        <tr><td>Estadía extendida cobrada (100% inmobiliaria)</td><td class="right">${fmtMoneda(l.totalExtension)}</td></tr>
-        <tr><td>Teórico dueño (${l.pctDueño}% del alquiler)</td><td class="right">${fmtMoneda(l.teoricoDueño)}</td></tr>
-        <tr><td>Teórico inmobiliaria (${l.pctGaston}% del alquiler + extensión)</td><td class="right">${fmtMoneda(l.teoricoGaston)}</td></tr>
+        <tr><td>Estadía extendida cobrada</td><td class="right">${fmtMoneda(l.totalExtension)}</td></tr>
+        <tr><td>Teórico dueño (${l.pctDueño}% del alquiler y la extensión)</td><td class="right">${fmtMoneda(l.teoricoDueño)}</td></tr>
+        <tr><td>Teórico inmobiliaria (${l.pctGaston}% del alquiler y la extensión)</td><td class="right">${fmtMoneda(l.teoricoGaston)}</td></tr>
         <tr><td>Real recibido en cuenta de la inmobiliaria</td><td class="right">${fmtMoneda(l.realGaston)}</td></tr>
         <tr><td>Real recibido en cuenta del dueño</td><td class="right">${fmtMoneda(l.realPropietario)}</td></tr>
         ${gastos.map(g => `

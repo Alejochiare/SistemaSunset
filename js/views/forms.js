@@ -450,7 +450,7 @@ export function openPropForm(prop = null, onDone) {
             <div class="form-group" style="margin:0;max-width:160px">
               <label>% para el dueño</label>
               <input name="pctPropietarioTemporal" type="number" min="0" max="100" step="1" value="${prop.pctPropietarioTemporal ?? 70}">
-              <small class="text-xs text-soft" style="margin-top:.25rem;display:block">El resto (100 − este %) queda para la inmobiliaria. Sobre el alquiler; la estadía extendida siempre es 100% inmobiliaria.</small>
+              <small class="text-xs text-soft" style="margin-top:.25rem;display:block">El resto (100 − este %) queda para la inmobiliaria. Se aplica tanto al alquiler como a la estadía extendida.</small>
             </div>
           </div>
           <label style="display:flex;align-items:center;gap:.8rem;cursor:pointer;font-size:.92rem;font-weight:500">
