@@ -22,25 +22,31 @@ const METODOS_PAGO = ['Efectivo', 'Transferencia', 'Cheque', 'Débito', 'Otro'];
 
 function estadoInfo(id) { return ESTADOS.find(e => e.id === id) || ESTADOS[0]; }
 
-function noches(t) {
+export function noches(t) {
   if (!t.checkIn || !t.checkOut) return 0;
   const a = parseFechaLocal(t.checkIn), b = parseFechaLocal(t.checkOut);
   return Math.max(0, Math.round((b - a) / 86400000));
 }
 
-function totalReserva(t) {
+export function totalReserva(t) {
   const base = t.precioTotal || (noches(t) * (t.precioPorNoche || 0));
   return base + (t.montoExtension || 0);
 }
 
-/** Saldo de una reserva: total, seña, lo ya cobrado del resto (vía Caja) y lo que falta cobrar. */
+/** Saldo de una reserva: total, seña, lo ya cobrado del resto (vía Caja, sumando pagosResto) y lo que falta cobrar. */
 function saldoReserva(t) {
   const total = totalReserva(t);
   const senia = t.senia || 0;
-  const restoCobrado = t.restoCajaRegistrado || 0;
+  const restoCobrado = (t.pagosResto || []).reduce((s, p) => s + (Number(p.monto) || 0), 0);
   const resta = Math.max(0, Math.round((total - senia - restoCobrado) * 100) / 100);
   return { total, senia, restoCobrado, resta };
 }
+
+export const CUENTAS_DESTINO = [
+  { id: 'gaston',      label: 'Cuenta de Gastón (inmobiliaria)' },
+  { id: 'propietario', label: 'Cuenta del dueño del depto' },
+];
+export function cuentaLabel(id) { return CUENTAS_DESTINO.find(c => c.id === id)?.label || '—'; }
 
 function siguienteDiaISO(fechaStr) {
   const d = parseFechaLocal(fechaStr);
@@ -487,9 +493,17 @@ function abrirDetalleTemporal(t, onDone) {
       <h3 class="form-section-title" style="margin-top:1.1rem">Precios</h3>
       ${fila('Precio por noche', t.precioPorNoche ? '$' + Number(t.precioPorNoche).toLocaleString('es-AR') : null)}
       ${fila('Total', total ? '$' + total.toLocaleString('es-AR') : '—')}
-      ${fila('Seña cobrada', senia ? '$' + senia.toLocaleString('es-AR') + ' (en Caja)' : null)}
-      ${fila('Resto cobrado', restoCobrado ? '$' + restoCobrado.toLocaleString('es-AR') + ' (en Caja)' : null)}
+      ${fila('Seña cobrada', senia ? `$${senia.toLocaleString('es-AR')} · ${cuentaLabel(t.cuentaSenia || 'gaston')}` : null)}
+      ${fila('Resto cobrado', restoCobrado ? '$' + restoCobrado.toLocaleString('es-AR') + ' (ver detalle abajo)' : null)}
       ${fila('Resta cobrar', resta > 0 ? '$' + resta.toLocaleString('es-AR') : null)}
+      ${(t.pagosResto || []).length ? `
+      <div style="margin-top:.5rem;display:flex;flex-direction:column;gap:.3rem">
+        ${t.pagosResto.map(p => `
+        <div style="display:flex;justify-content:space-between;font-size:.78rem;color:var(--text-soft);background:var(--surface-2);border-radius:var(--r-sm);padding:.35rem .6rem">
+          <span>${fmtFechaCorta(p.fecha)} · ${esc(p.metodoPago)} · ${cuentaLabel(p.cuentaDestino)}</span>
+          <span style="font-weight:700;color:var(--text)">$${Number(p.monto).toLocaleString('es-AR')}</span>
+        </div>`).join('')}
+      </div>` : ''}
 
       ${t.notas ? `<h3 class="form-section-title" style="margin-top:1.1rem">Notas</h3><div style="font-size:.85rem;color:var(--text-soft);font-style:italic">${esc(t.notas)}</div>` : ''}
     `,
@@ -532,6 +546,10 @@ function abrirCobroRestoTemporal(t, onDone) {
             <select name="metodoPago">${METODOS_PAGO.map(m => `<option value="${m}">${m}</option>`).join('')}</select>
           </div>
           <div class="form-group full">
+            <label>¿A qué cuenta fue este cobro?</label>
+            <select name="cuentaDestino">${CUENTAS_DESTINO.map(c => `<option value="${c.id}">${c.label}</option>`).join('')}</select>
+          </div>
+          <div class="form-group full">
             <label>Referencia</label>
             <input name="referencia" placeholder="Opcional">
           </div>
@@ -547,7 +565,7 @@ function abrirCobroRestoTemporal(t, onDone) {
         const monto = valorMonto(f.monto.value);
         if (!monto || monto <= 0) { toast('Indicá un monto válido', { tipo: 'warning' }); return; }
         await actions.registrarCobroRestoTemporal(t.id, {
-          monto, metodoPago: f.metodoPago.value, referencia: f.referencia.value || null,
+          monto, metodoPago: f.metodoPago.value, referencia: f.referencia.value || null, cuentaDestino: f.cuentaDestino.value,
         });
         toast('Cobro registrado en Caja');
         close();
@@ -658,6 +676,10 @@ function abrirFormTemporal(t, onDone) {
           <div class="form-group">
             <label>Forma de pago de la seña</label>
             <select name="metodoPagoSenia">${METODOS_PAGO.map(m => `<option value="${m}" ${(t.metodoPagoSenia||'Efectivo')===m?'selected':''}>${m}</option>`).join('')}</select>
+          </div>
+          <div class="form-group full">
+            <label>¿A qué cuenta fue la seña?</label>
+            <select name="cuentaSenia">${CUENTAS_DESTINO.map(c => `<option value="${c.id}" ${(t.cuentaSenia||'gaston')===c.id?'selected':''}>${c.label}</option>`).join('')}</select>
           </div>
         </div>
         <p style="font-size:.75rem;color:var(--text-soft);margin-top:-.4rem">La seña se manda sola a Control de caja al guardar. El resto se registra después, desde el detalle de la reserva.</p>
@@ -775,6 +797,7 @@ function abrirFormTemporal(t, onDone) {
           precioTotal:   num('precioTotal') || null,
           senia:         num('senia') || null,
           metodoPagoSenia: get('metodoPagoSenia') || 'Efectivo',
+          cuentaSenia:   get('cuentaSenia') || 'gaston',
           estado,
           notas:         get('notas') || null,
         };
@@ -787,3 +810,4 @@ function abrirFormTemporal(t, onDone) {
     },
   });
 }
+

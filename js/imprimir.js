@@ -6,6 +6,7 @@ const KEY_AGENCIA  = 'inmocrm_agencia';
 const KEY_NUM_REC  = 'inmocrm_num_recibo';
 const KEY_NUM_LIQ  = 'inmocrm_num_liquidacion';
 const KEY_NUM_DEUDA = 'inmocrm_num_deuda';
+const KEY_NUM_LIQT = 'inmocrm_num_liquidacion_temporal';
 
 /* ── Agencia config ──────────────────────────────────────── */
 export function getAgencia() {
@@ -627,6 +628,89 @@ export function imprimirReciboTemporal({ temporal, propiedad }) {
   </div>`;
 
   abrirVentana('Recibo de Alquiler Temporario', `
+    ${copia('ORIGINAL')}
+    <div class="separador">· · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · ·</div>
+    ${copia('DUPLICADO')}
+  `);
+}
+
+/* ============================================================
+   LIQUIDACIÓN MENSUAL DE ALQUILER TEMPORAL
+   Reparto dueño/inmobiliaria + gastos compartidos. Agrupa TODAS las
+   propiedades temporales de un mismo dueño en una sola liquidación.
+   { liquidacion, propiedades, propietario }
+   ============================================================ */
+export function imprimirLiquidacionTemporal({ liquidacion: l, propiedades = [], propietario }) {
+  const ag  = getAgencia();
+  const num = fmtDocNum(nextNum(KEY_NUM_LIQT));
+  const fecha = (l.fechaCierre || new Date().toISOString()).slice(0, 10);
+
+  const propsLabel = propiedades.length
+    ? propiedades.map(p => p.nombreTemporal || p.direccion).join(', ')
+    : '—';
+  const gastos = l.gastos || [];
+  const totalGastos = gastos.reduce((s, g) => s + (Number(g.monto) || 0), 0);
+  const transferencia = l.transferencia;
+
+  const copia = (tipoCop) => `
+  <div class="copia">
+    ${headerDoc(ag, 'LIQUIDACIÓN', num, fecha)}
+
+    <div class="banda-concepto">
+      LIQUIDACIÓN MENSUAL — ALQUILER TEMPORARIO · ${mesLabel(l.mes)}
+    </div>
+
+    <div class="cliente-blk">
+      <div class="dato-fld" style="grid-column:1/-1"><span class="lbl">Propiedades:</span> <strong>${esc(propsLabel)}</strong></div>
+      <div class="dato-fld"><span class="lbl">Dueño:</span> <strong>${esc(propietario?.nombre || '—')}</strong></div>
+      <div class="dato-fld"><span class="lbl">Reparto:</span> ${l.pctDueño}% dueño / ${l.pctGaston}% inmobiliaria</div>
+    </div>
+
+    <table class="tabla">
+      <thead><tr>
+        <th>Concepto</th>
+        <th class="right">Importe</th>
+      </tr></thead>
+      <tbody>
+        <tr><td>Alquiler cobrado en el período</td><td class="right">${fmtMoneda(l.totalBase)}</td></tr>
+        <tr><td>Estadía extendida cobrada (100% inmobiliaria)</td><td class="right">${fmtMoneda(l.totalExtension)}</td></tr>
+        <tr><td>Teórico dueño (${l.pctDueño}% del alquiler)</td><td class="right">${fmtMoneda(l.teoricoDueño)}</td></tr>
+        <tr><td>Teórico inmobiliaria (${l.pctGaston}% del alquiler + extensión)</td><td class="right">${fmtMoneda(l.teoricoGaston)}</td></tr>
+        <tr><td>Real recibido en cuenta de la inmobiliaria</td><td class="right">${fmtMoneda(l.realGaston)}</td></tr>
+        <tr><td>Real recibido en cuenta del dueño</td><td class="right">${fmtMoneda(l.realPropietario)}</td></tr>
+        ${gastos.map(g => `
+        <tr>
+          <td>Gasto: ${esc(g.concepto || 'Sin concepto')} (pagado por ${g.pagadoPor === 'gaston' ? 'la inmobiliaria' : 'el dueño'})</td>
+          <td class="right">${fmtMoneda(g.monto)}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+
+    <div class="totales">
+      ${totalGastos > 0 ? `
+      <div class="total-row">
+        <div class="total-label">Total gastos del mes:</div>
+        <div class="total-val">${fmtMoneda(totalGastos)}</div>
+      </div>` : ''}
+      <div class="total-row grand">
+        <div class="total-label">${transferencia ? (transferencia.desde === 'gaston' ? 'INMOBILIARIA TRANSFIERE AL DUEÑO' : 'DUEÑO TRANSFIERE A LA INMOBILIARIA') : 'RESULTADO'}:</div>
+        <div class="total-val">${transferencia ? fmtMoneda(transferencia.monto) : 'Saldado — sin transferencia'}</div>
+      </div>
+    </div>
+
+    <div class="letras-blk">
+      <div>
+        ${transferencia ? `<div><span class="lbl">Son pesos:</span> <strong>${enLetras(transferencia.monto)}</strong></div>` : ''}
+      </div>
+    </div>
+
+    <div class="firma-blk">
+      <div class="firma-linea">Firma y aclaración</div>
+      <div class="copia-label">— ${tipoCop} —</div>
+    </div>
+  </div>`;
+
+  abrirVentana('Liquidación Temporal', `
     ${copia('ORIGINAL')}
     <div class="separador">· · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · ·</div>
     ${copia('DUPLICADO')}

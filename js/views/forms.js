@@ -441,11 +441,16 @@ export function openPropForm(prop = null, onDone) {
               <small style="color:var(--text-soft);display:block;margin-top:.15rem">Alquileres por noche/semana</small>
             </span>
           </label>
-          <div id="blkNombreTemporal" style="display:${prop.habilitadaTemporal?'block':'none'};padding-left:2.6rem">
+          <div id="blkNombreTemporal" style="display:${prop.habilitadaTemporal?'flex':'none'};padding-left:2.6rem;gap:1rem;flex-wrap:wrap">
             <div class="form-group" style="margin:0;max-width:260px">
               <label>Nombre corto (para la agenda)</label>
               <input name="nombreTemporal" value="${esc(prop.nombreTemporal||'')}" placeholder="Ej: Depto 1">
               <small class="text-xs text-soft" style="margin-top:.25rem;display:block">Así se identifica esta propiedad en la agenda de temporales.</small>
+            </div>
+            <div class="form-group" style="margin:0;max-width:160px">
+              <label>% para el dueño</label>
+              <input name="pctPropietarioTemporal" type="number" min="0" max="100" step="1" value="${prop.pctPropietarioTemporal ?? 70}">
+              <small class="text-xs text-soft" style="margin-top:.25rem;display:block">El resto (100 − este %) queda para la inmobiliaria. Sobre el alquiler; la estadía extendida siempre es 100% inmobiliaria.</small>
             </div>
           </div>
           <label style="display:flex;align-items:center;gap:.8rem;cursor:pointer;font-size:.92rem;font-weight:500">
@@ -503,7 +508,7 @@ export function openPropForm(prop = null, onDone) {
     onMount(ctx) {
       // Mostrar/ocultar el nombre corto según si es alquiler temporal
       ctx.overlay.querySelector('#chkHabTemporal').addEventListener('change', (e) => {
-        ctx.overlay.querySelector('#blkNombreTemporal').style.display = e.target.checked ? 'block' : 'none';
+        ctx.overlay.querySelector('#blkNombreTemporal').style.display = e.target.checked ? 'flex' : 'none';
       });
 
       // Buscador de propietario
@@ -590,6 +595,7 @@ export function openPropForm(prop = null, onDone) {
         ['ambientes','banos','m2','m2Cubiertos','antiguedad','pisosEdificio'].forEach(k => {
           data[k] = data[k] ? Number(data[k]) : null;
         });
+        data.pctPropietarioTemporal = data.pctPropietarioTemporal !== '' ? Number(data.pctPropietarioTemporal) : 70;
         // Montos (con formato de miles a limpiar)
         ['precioAlquiler','precioVenta','expensas'].forEach(k => {
           data[k] = data[k] ? valorMonto(data[k]) : null;

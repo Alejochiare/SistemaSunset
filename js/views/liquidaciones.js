@@ -6,7 +6,8 @@ import { icon } from '../config.js';
 import { esc, fmtMontoInput, valorMonto } from '../lib.js';
 import { openModal } from '../components/modal.js';
 import { toast } from '../components/toast.js';
-import { imprimirLiquidacion } from '../imprimir.js';
+import { imprimirLiquidacion, imprimirLiquidacionTemporal } from '../imprimir.js';
+import { cuentaLabel, noches } from './temporales.js';
 
 function fmtFecha(s) {
   if (!s) return '—';
@@ -20,6 +21,127 @@ function mesLabel(s) {
   return `${MESES[+m - 1]} ${y}`;
 }
 function fmt$(n) { return Number(n || 0).toLocaleString('es-AR', { style: 'currency', currency: 'ARS', maximumFractionDigits: 0 }); }
+
+/* ============================================================
+   ALQUILER TEMPORAL — reparto dueño/inmobiliaria + gastos
+   ============================================================ */
+
+/** IDs de señas y pagos de resto que ya quedaron incluidos en alguna liquidación
+ *  temporal cerrada, para no volver a contarlos en un cierre posterior. */
+function pagosYaLiquidados() {
+  const { liquidacionesTemporales } = getState();
+  const senas = new Set();
+  const restos = new Set();
+  (liquidacionesTemporales || []).forEach(l => {
+    (l.senasIncluidas || []).forEach(id => senas.add(id));
+    (l.pagosRestoIncluidos || []).forEach(id => restos.add(id));
+  });
+  return { senas, restos };
+}
+
+/** Calcula el reparto teórico (según el % de cada propiedad, extensión 100%
+ *  inmobiliaria) contra lo que realmente entró a cada cuenta (seña + pagos de
+ *  resto), agrupando TODAS las propiedades temporales de un mismo dueño en un
+ *  solo cálculo (una sola liquidación), para un mes dado. Deja afuera lo que
+ *  ya haya sido liquidado antes. */
+function calcularLiquidacionTemporal(propietarioId, mes) {
+  const { temporales, propiedades } = getState();
+  const propsDelDueno = propiedades.filter(p => p.propietarioId === propietarioId && p.habilitadaTemporal);
+  const { senas: yaSenas, restos: yaRestos } = pagosYaLiquidados();
+
+  let totalBase = 0, totalExtension = 0, realGaston = 0, realPropietario = 0;
+  let teoricoDueño = 0, teoricoGaston = 0;
+  const detalle = [];
+  const senasIncluidas = [];
+  const pagosRestoIncluidos = [];
+
+  propsDelDueno.forEach(prop => {
+    const pctDueñoProp = prop.pctPropietarioTemporal ?? 70;
+    const pctGastonProp = 100 - pctDueñoProp;
+
+    temporales.filter(t => t.propiedadId === prop.id).forEach(t => {
+      const base = t.precioTotal || (noches(t) * (t.precioPorNoche || 0));
+      const ext = t.montoExtension || 0;
+      const total = base + ext;
+      if (total <= 0) return;
+      const fracBase = base / total;
+      const fracExt = ext / total;
+
+      const eventos = [];
+      if (t.senia > 0 && t.fechaSenia && t.fechaSenia.slice(0, 7) === mes && !yaSenas.has(t.id)) {
+        eventos.push({ tipo: 'senia', monto: t.senia, cuenta: t.cuentaSenia || 'gaston', refId: t.id });
+      }
+      (t.pagosResto || []).forEach(p => {
+        if (p.fecha && p.fecha.slice(0, 7) === mes && !yaRestos.has(p.id)) {
+          eventos.push({ tipo: 'resto', monto: p.monto, cuenta: p.cuentaDestino || 'gaston', refId: p.id });
+        }
+      });
+      if (!eventos.length) return;
+
+      eventos.forEach(e => {
+        const b = e.monto * fracBase;
+        const x = e.monto * fracExt;
+        totalBase += b;
+        totalExtension += x;
+        teoricoDueño += b * (pctDueñoProp / 100);
+        teoricoGaston += b * (pctGastonProp / 100) + x;
+        if (e.cuenta === 'gaston') realGaston += e.monto; else realPropietario += e.monto;
+        if (e.tipo === 'senia') senasIncluidas.push(e.refId); else pagosRestoIncluidos.push(e.refId);
+      });
+
+      detalle.push({ t, prop, eventos });
+    });
+  });
+
+  // diffBase > 0: a Gastón le entró de más (le corresponde transferirle al dueño esa diferencia)
+  const diffBase = Math.round((realGaston - teoricoGaston) * 100) / 100;
+  // % efectivo (ponderado) sobre el total de alquiler base, para mostrar y para prorratear gastos
+  // cuando las propiedades del mismo dueño tuvieran distinto % pactado.
+  const pctDueño = totalBase > 0 ? Math.round((teoricoDueño / totalBase) * 10000) / 100 : (propsDelDueno[0]?.pctPropietarioTemporal ?? 70);
+  const pctGaston = 100 - pctDueño;
+
+  return {
+    propiedades: propsDelDueno, pctDueño, pctGaston,
+    totalBase: Math.round(totalBase), totalExtension: Math.round(totalExtension),
+    realGaston: Math.round(realGaston), realPropietario: Math.round(realPropietario),
+    teoricoDueño: Math.round(teoricoDueño), teoricoGaston: Math.round(teoricoGaston),
+    diffBase, detalle, senasIncluidas, pagosRestoIncluidos,
+  };
+}
+
+/** Junta, por dueño, todo lo cobrado (seña + resto) de sus propiedades temporales
+ *  que todavía no entró en ninguna liquidación cerrada — sin importar el mes —
+ *  para mostrar un resumen rápido de "pendientes" antes de elegir el mes exacto. */
+function pendientesTemporalesPorDueño() {
+  const { propiedades, propietarios, temporales } = getState();
+  const propsTemp = propiedades.filter(p => p.habilitadaTemporal && p.propietarioId);
+  const { senas: yaSenas, restos: yaRestos } = pagosYaLiquidados();
+  const porDueño = {};
+
+  propsTemp.forEach(prop => {
+    temporales.filter(t => t.propiedadId === prop.id).forEach(t => {
+      let montoPend = 0;
+      const meses = new Set();
+      if (t.senia > 0 && t.fechaSenia && !yaSenas.has(t.id)) { montoPend += t.senia; meses.add(t.fechaSenia.slice(0, 7)); }
+      (t.pagosResto || []).forEach(p => {
+        if (p.fecha && !yaRestos.has(p.id)) { montoPend += p.monto; meses.add(p.fecha.slice(0, 7)); }
+      });
+      if (montoPend <= 0) return;
+
+      const key = prop.propietarioId;
+      if (!porDueño[key]) {
+        porDueño[key] = { propietarioId: key, own: propietarios.find(x => x.id === key), total: 0, meses: new Set(), props: new Set() };
+      }
+      porDueño[key].total += montoPend;
+      meses.forEach(m => porDueño[key].meses.add(m));
+      porDueño[key].props.add(prop.id);
+    });
+  });
+
+  return Object.values(porDueño)
+    .map(g => ({ ...g, meses: [...g.meses].sort(), props: [...g.props] }))
+    .sort((a, b) => (a.meses[0] || '').localeCompare(b.meses[0] || ''));
+}
 
 /* ── Forma de pago (una o varias líneas: efectivo + transferencia, etc.) ── */
 const METODOS_PAGO = [
@@ -164,19 +286,23 @@ function cobrosALiquidar(state) {
 
 export default function liquidaciones(root) {
   root.innerHTML = `<div class="view" id="vLiq"></div>`;
+  let modo = 'normal'; // normal | temporal
   let filtro = 'pendientes'; // pendientes | historial
-  let pendientes = []; // Mantener referencia a pendientes
+  let pendientes = []; // Mantener referencia a pendientes (alquiler normal)
 
   const render = () => {
     const state = getState();
     pendientes = cobrosALiquidar(state);
-    pintar(root.querySelector('#vLiq'), filtro, pendientes);
+    pintar(root.querySelector('#vLiq'), { modo, filtro, pendientes });
   };
-  
+
   render();
   const unsub = subscribe(render);
 
   root.querySelector('#vLiq').addEventListener('click', async e => {
+    const modoBtn = e.target.closest('[data-modo-liq]');
+    if (modoBtn) { modo = modoBtn.dataset.modoLiq; render(); return; }
+
     const pill = e.target.closest('[data-filtro]');
     if (pill) { filtro = pill.dataset.filtro; render(); return; }
 
@@ -191,7 +317,36 @@ export default function liquidaciones(root) {
       return;
     }
 
-    // Acciones sobre liquidaciones ya registradas
+    // Alquiler temporal: abrir el modal de liquidación ya con el dueño elegido
+    const btnLiqTemp = e.target.closest('[data-liq-temp-dueño]');
+    if (btnLiqTemp) {
+      abrirLiquidacionTemporalModal(render, btnLiqTemp.dataset.liqTempDueño);
+      return;
+    }
+    if (e.target.closest('#btnNuevaLiqTemp')) {
+      abrirLiquidacionTemporalModal(render);
+      return;
+    }
+    const pdfTemp = e.target.closest('[data-pdf-liqt]');
+    if (pdfTemp) {
+      const l = (getState().liquidacionesTemporales || []).find(x => x.id === pdfTemp.dataset.pdfLiqt);
+      if (l) {
+        const propiedadesLiq = getState().propiedades.filter(p => (l.propiedadesIds || []).includes(p.id));
+        const propietario = getState().propietarios.find(p => p.id === l.propietarioId);
+        imprimirLiquidacionTemporal({ liquidacion: l, propiedades: propiedadesLiq, propietario });
+      }
+      return;
+    }
+    const delTemp = e.target.closest('[data-eliminar-liqt]');
+    if (delTemp) {
+      if (confirm('¿Eliminar esta liquidación? Los cobros que incluía volverán a aparecer como pendientes de liquidar.')) {
+        await actions.deleteLiquidacionTemporal(delTemp.dataset.eliminarLiqt);
+        toast('Liquidación eliminada');
+      }
+      return;
+    }
+
+    // Acciones sobre liquidaciones ya registradas (alquiler normal)
     const card = e.target.closest('[data-liq-id]');
     if (!card) return;
     const id = card.dataset.liqId;
@@ -209,7 +364,41 @@ export default function liquidaciones(root) {
   return unsub;
 }
 
-function pintar(el, filtro, pendientes) {
+function pintar(el, { modo, filtro, pendientes }) {
+  el.innerHTML = `
+    <div class="view-head">
+      <div>
+        <h1 class="view-title">Liquidaciones</h1>
+        <p class="view-sub">Pagos a propietarios</p>
+      </div>
+      ${modo === 'temporal' ? `<button class="btn btn-primary" id="btnNuevaLiqTemp">${icon('plus')} Liquidar alquiler temporal</button>` : ''}
+    </div>
+
+    <!-- Alquiler normal / temporal -->
+    <div style="display:flex;gap:.5rem;margin-bottom:.75rem">
+      ${[
+        { id: 'normal',   label: '🔑 Alquiler normal' },
+        { id: 'temporal', label: '🏖 Alquiler temporal' },
+      ].map(m => {
+        const activo = modo === m.id;
+        return `<button data-modo-liq="${m.id}" style="
+          padding:.4rem 1rem;border-radius:999px;font-size:.82rem;font-weight:700;cursor:pointer;border:none;
+          background:${activo ? 'var(--primary)' : 'var(--surface-2)'};
+          color:${activo ? '#fff' : 'var(--text-soft)'};transition:all .15s">
+          ${m.label}
+        </button>`;
+      }).join('')}
+    </div>
+
+    <div id="vLiqBody"></div>
+  `;
+
+  const body = el.querySelector('#vLiqBody');
+  if (modo === 'temporal') pintarLiquidacionesTemporales(body);
+  else pintarLiquidacionesNormales(body, filtro, pendientes);
+}
+
+function pintarLiquidacionesNormales(el, filtro, pendientes) {
   const state = getState();
   const { liquidaciones: list, alquileres } = state;
   const historial  = (list || []).map(l => {
@@ -237,12 +426,7 @@ function pintar(el, filtro, pendientes) {
   }, 0);
 
   el.innerHTML = `
-    <div class="view-head">
-      <div>
-        <h1 class="view-title">Liquidaciones</h1>
-        <p class="view-sub">Pagos a propietarios · ${pendientes.length} por liquidar · ${fmt$(totalPend)} pendiente</p>
-      </div>
-    </div>
+    <p class="view-sub" style="margin-bottom:.75rem">${pendientes.length} por liquidar · ${fmt$(totalPend)} pendiente</p>
 
     <!-- Pills -->
     <div style="display:flex;gap:.5rem;margin-bottom:1.25rem">
@@ -263,6 +447,70 @@ function pintar(el, filtro, pendientes) {
     </div>
 
     ${filtro === 'pendientes' ? renderPendientes(pendientes) : renderHistorial(historial)}
+  `;
+}
+
+function pintarLiquidacionesTemporales(el) {
+  const pendientes = pendientesTemporalesPorDueño();
+  const historial = (getState().liquidacionesTemporales || [])
+    .sort((a, b) => (b.mes || '').localeCompare(a.mes || '') || (b.fechaCierre || '').localeCompare(a.fechaCierre || ''));
+
+  el.innerHTML = `
+    <p class="view-sub" style="margin-bottom:1rem">Reparto dueño / inmobiliaria de las propiedades de alquiler temporal</p>
+
+    ${pendientes.length ? `
+    <h3 class="form-section-title">Pendientes de liquidar</h3>
+    <div style="display:flex;flex-direction:column;gap:.6rem;margin-bottom:1.5rem">
+      ${pendientes.map(g => `
+        <div class="card" style="padding:1rem 1.25rem;border-left:3px solid var(--warning)">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap">
+            <div>
+              <div style="font-weight:700;font-size:1.05rem">${esc(g.own?.nombre || '—')}</div>
+              <div style="font-size:.82rem;color:var(--text-soft)">${g.props.length} propiedad${g.props.length !== 1 ? 'es' : ''} · ${g.meses.map(mesLabel).join(', ')}</div>
+            </div>
+            <div style="display:flex;flex-direction:column;align-items:flex-end;gap:.5rem">
+              <div style="font-size:1.3rem;font-weight:900;color:var(--warning)">${fmt$(g.total)}</div>
+              <button class="btn btn-primary btn-sm" data-liq-temp-dueño="${g.propietarioId}">Liquidar →</button>
+            </div>
+          </div>
+        </div>`).join('')}
+    </div>` : `
+    <div class="card" style="padding:2rem 1.5rem;text-align:center;color:var(--text-soft);margin-bottom:1.5rem">
+      <div style="font-size:2rem;margin-bottom:.5rem">✅</div>
+      <div style="font-weight:600;margin-bottom:.25rem">Todo liquidado</div>
+      <div style="font-size:.82rem;color:var(--text-faint)">No hay cobros de alquiler temporal pendientes de liquidar</div>
+    </div>`}
+
+    <h3 class="form-section-title">Historial</h3>
+    ${historial.length ? `
+    <div style="display:flex;flex-direction:column;gap:.6rem">
+      ${historial.map(l => {
+        const own = getState().propietarios.find(p => p.id === l.propietarioId);
+        return `
+        <div class="card" style="padding:1rem 1.25rem">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;flex-wrap:wrap">
+            <div>
+              <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.3rem">
+                <span style="font-weight:700">${esc(own?.nombre || '—')}</span>
+                <span class="badge badge-success">Liquidado</span>
+                <span class="badge badge-neutral">${mesLabel(l.mes)}</span>
+              </div>
+              <div style="font-size:.82rem;color:var(--text-soft)">
+                ${l.transferencia ? `${l.transferencia.desde === 'gaston' ? 'Gastón → dueño' : 'Dueño → Gastón'}: ${fmt$(l.transferencia.monto)}` : 'Todo saldado'}
+              </div>
+            </div>
+            <div style="display:flex;gap:.3rem;flex-shrink:0">
+              <button class="btn btn-sm btn-ghost" data-pdf-liqt="${l.id}">${icon('file')} PDF</button>
+              <button class="btn btn-xs btn-ghost" style="color:var(--danger)" data-eliminar-liqt="${l.id}">${icon('trash')}</button>
+            </div>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>` : `
+    <div class="card" style="padding:2rem 1.5rem;text-align:center;color:var(--text-soft)">
+      <div style="font-size:2rem;margin-bottom:.5rem">📄</div>
+      <div style="font-weight:600">Sin historial aún</div>
+    </div>`}
   `;
 }
 
@@ -771,6 +1019,241 @@ export function abrirFormLiquidacion(pre, onDone) {
 
       pagosCtl = montarPagos(ctx, { getTotal: () => valorMonto(q('#liqTotal').value) });
       q('#liqTotal').addEventListener('input', () => pagosCtl?.refrescarTotal());
+    },
+  });
+}
+
+/* ── Liquidación mensual de alquiler temporal (reparto dueño/inmobiliaria + gastos) ── */
+export function abrirLiquidacionTemporalModal(onDone, preselectPropietarioId) {
+  const { propiedades, propietarios } = getState();
+  const propsTemp = propiedades.filter(p => p.habilitadaTemporal);
+  // Dueños que tienen al menos una propiedad de alquiler temporal — se liquidan
+  // TODAS sus propiedades juntas, en una sola factura.
+  const dueñosIds = [...new Set(propsTemp.map(p => p.propietarioId).filter(Boolean))];
+  const dueños = dueñosIds
+    .map(id => propietarios.find(p => p.id === id))
+    .filter(Boolean)
+    .sort((a, b) => (a.nombre || '').localeCompare(b.nombre || '', 'es'));
+
+  if (!dueños.length) {
+    toast('No hay propiedades habilitadas para alquiler temporal con un dueño asignado', { tipo: 'warning' });
+    return;
+  }
+
+  const hoy = new Date();
+  const mesHoy = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}`;
+  let gastos = []; // { concepto, monto, pagadoPor }
+
+  openModal({
+    title: '💰 Liquidación mensual — Alquiler temporal',
+    size: 'xl',
+    bodyHTML: `
+      <div class="form-grid" style="margin-bottom:1rem">
+        <div class="form-group">
+          <label>Dueño</label>
+          <select id="liqTPropietario">${dueños.map(d => `<option value="${d.id}" ${d.id === preselectPropietarioId ? 'selected' : ''}>${esc(d.nombre)}</option>`).join('')}</select>
+          <small class="text-xs text-soft" style="margin-top:.25rem;display:block">Se liquidan juntas todas sus propiedades de alquiler temporal.</small>
+        </div>
+        <div class="form-group">
+          <label>Mes</label>
+          <input id="liqTMes" type="month" value="${mesHoy}">
+        </div>
+      </div>
+      <div id="liqTBody"></div>
+    `,
+    footerHTML: `
+      <button class="btn btn-ghost" data-close>Cancelar</button>
+      <button class="btn btn-ghost" id="btnSoloGuardarLiqT">Guardar sin PDF</button>
+      <button class="btn btn-primary" id="btnGuardarPDFLiqT">Guardar y generar PDF</button>`,
+    onMount(ctx) {
+      const q = sel => ctx.overlay.querySelector(sel);
+      const bodyEl = q('#liqTBody');
+
+      const calcularConGastos = () => {
+        const propietarioId = q('#liqTPropietario').value;
+        const mes = q('#liqTMes').value || mesHoy;
+        const calc = calcularLiquidacionTemporal(propietarioId, mes);
+        let ajusteGastos = 0;
+        gastos.forEach(g => {
+          const monto = Number(g.monto) || 0;
+          if (!monto || !g.pagadoPor) return;
+          if (g.pagadoPor === 'gaston') ajusteGastos -= monto * (calc.pctDueño / 100);
+          else ajusteGastos += monto * (calc.pctGaston / 100);
+        });
+        const diffFinal = Math.round((calc.diffBase + ajusteGastos) * 100) / 100;
+        return { propietarioId, mes, calc, ajusteGastos, diffFinal };
+      };
+
+      const render = () => {
+        const { propietarioId, mes, calc, ajusteGastos, diffFinal } = calcularConGastos();
+        const own = dueños.find(d => d.id === propietarioId);
+        const nombresProps = calc.propiedades.map(p => p.nombreTemporal || p.direccion).join(', ');
+
+        bodyEl.innerHTML = `
+          <div style="background:var(--surface-2);border-radius:var(--r-md);padding:1rem;margin-bottom:1rem">
+            <div style="font-size:.72rem;color:var(--text-soft);text-transform:uppercase;letter-spacing:.04em;margin-bottom:.3rem">
+              ${esc(own?.nombre || '—')} · ${calc.propiedades.length} propiedad${calc.propiedades.length !== 1 ? 'es' : ''}: ${esc(nombresProps || '—')}
+            </div>
+            <div style="font-size:.72rem;color:var(--text-soft);text-transform:uppercase;letter-spacing:.04em;margin-bottom:.6rem">
+              Reparto: ${calc.pctDueño}% dueño / ${calc.pctGaston}% inmobiliaria · la estadía extendida es 100% inmobiliaria
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:.75rem">
+              ${[
+                ['Alquiler (base)', calc.totalBase],
+                ['Estadía extendida', calc.totalExtension],
+                ['Teórico dueño', calc.teoricoDueño],
+                ['Teórico inmobiliaria', calc.teoricoGaston],
+                ['Real en cta. Gastón', calc.realGaston],
+                ['Real en cta. dueño', calc.realPropietario],
+              ].map(([lbl, val]) => `
+                <div>
+                  <div style="font-size:.68rem;color:var(--text-soft)">${lbl}</div>
+                  <div style="font-weight:700">$${Math.round(val).toLocaleString('es-AR')}</div>
+                </div>`).join('')}
+            </div>
+          </div>
+
+          ${calc.detalle.length ? `
+          <div style="max-height:180px;overflow-y:auto;margin-bottom:1rem;border:1px solid var(--border);border-radius:var(--r-sm)">
+            <table style="width:100%;font-size:.78rem;border-collapse:collapse">
+              <thead><tr style="background:var(--surface-2)">
+                <th style="padding:.4rem .6rem;text-align:left">Propiedad</th>
+                <th style="text-align:left">Huésped</th>
+                <th style="text-align:left">Tipo</th>
+                <th style="text-align:left">Cuenta</th>
+                <th style="text-align:right;padding-right:.6rem">Monto</th>
+              </tr></thead>
+              <tbody>
+                ${calc.detalle.flatMap(d => d.eventos.map(e => `
+                  <tr>
+                    <td style="padding:.35rem .6rem">${esc(d.prop.nombreTemporal || d.prop.direccion)}</td>
+                    <td>${esc(d.t.huesped || '—')}</td>
+                    <td>${e.tipo === 'senia' ? 'Seña' : 'Resto'}</td>
+                    <td>${cuentaLabel(e.cuenta)}</td>
+                    <td style="text-align:right;padding-right:.6rem;font-weight:600">$${Math.round(e.monto).toLocaleString('es-AR')}</td>
+                  </tr>`).join('')).join('')}
+              </tbody>
+            </table>
+          </div>` : `<div style="color:var(--text-faint);font-size:.82rem;margin-bottom:1rem">No hay cobros de estas propiedades en ${mes} pendientes de liquidar.</div>`}
+
+          <h3 class="form-section-title">Gastos del mes (agua, luz, gas, reparaciones, etc.)</h3>
+          <div id="liqTGastos" style="margin-bottom:.5rem"></div>
+          <button type="button" id="btnAddGastoT" class="btn btn-sm btn-ghost" style="margin-bottom:1rem">${icon('plus')} Agregar gasto</button>
+
+          <div style="border-top:2px solid var(--border);padding-top:.85rem;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.5rem">
+            <div id="liqTAjusteGastos" style="font-size:.82rem;color:var(--text-soft)">${ajusteGastos ? `Ajuste por gastos: ${ajusteGastos > 0 ? '+' : '−'}$${Math.abs(Math.round(ajusteGastos)).toLocaleString('es-AR')}` : ''}</div>
+            <div style="text-align:right">
+              <div style="font-size:.72rem;color:var(--text-soft)">Resultado</div>
+              <div id="liqTResultadoTexto" style="font-size:1.1rem;font-weight:900;color:${diffFinal === 0 ? 'var(--text-soft)' : 'var(--primary)'}">
+                ${diffFinal === 0 ? 'Todo saldado' : diffFinal > 0
+                  ? `Gastón transfiere $${Math.abs(Math.round(diffFinal)).toLocaleString('es-AR')} al dueño`
+                  : `El dueño transfiere $${Math.abs(Math.round(diffFinal)).toLocaleString('es-AR')} a Gastón`}
+              </div>
+            </div>
+          </div>
+        `;
+
+        renderGastos();
+      };
+
+      // Recalcula solo el ajuste por gastos y el resultado final, sin reconstruir
+      // los inputs de gastos — así no se pierde el foco mientras se escribe el monto.
+      const actualizarResultado = () => {
+        const { ajusteGastos, diffFinal } = calcularConGastos();
+        const ajusteEl = q('#liqTAjusteGastos');
+        const resultadoEl = q('#liqTResultadoTexto');
+        if (ajusteEl) {
+          ajusteEl.textContent = ajusteGastos ? `Ajuste por gastos: ${ajusteGastos > 0 ? '+' : '−'}$${Math.abs(Math.round(ajusteGastos)).toLocaleString('es-AR')}` : '';
+        }
+        if (resultadoEl) {
+          resultadoEl.textContent = diffFinal === 0 ? 'Todo saldado' : diffFinal > 0
+            ? `Gastón transfiere $${Math.abs(Math.round(diffFinal)).toLocaleString('es-AR')} al dueño`
+            : `El dueño transfiere $${Math.abs(Math.round(diffFinal)).toLocaleString('es-AR')} a Gastón`;
+          resultadoEl.style.color = diffFinal === 0 ? 'var(--text-soft)' : 'var(--primary)';
+        }
+      };
+
+      const renderGastos = () => {
+        const blk = q('#liqTGastos');
+        blk.innerHTML = gastos.map((g, i) => `
+          <div style="display:flex;gap:.5rem;align-items:flex-end;margin-bottom:.5rem;flex-wrap:wrap" data-gasto-idx="${i}">
+            <div class="form-group" style="margin:0;flex:1;min-width:150px">
+              <label style="font-size:.72rem">Concepto</label>
+              <input data-f="concepto" value="${esc(g.concepto || '')}" placeholder="Ej: Agua, luz, gas, reparación...">
+            </div>
+            <div class="form-group" style="margin:0;width:120px">
+              <label style="font-size:.72rem">Monto $</label>
+              <input type="text" inputmode="numeric" class="input-monto" data-f="monto" value="${fmtMontoInput(g.monto)}">
+            </div>
+            <div class="form-group" style="margin:0;min-width:170px">
+              <label style="font-size:.72rem">Lo pagó</label>
+              <select data-f="pagadoPor">
+                <option value="gaston" ${g.pagadoPor === 'gaston' ? 'selected' : ''}>Gastón (inmobiliaria)</option>
+                <option value="propietario" ${g.pagadoPor === 'propietario' ? 'selected' : ''}>Dueño del depto</option>
+              </select>
+            </div>
+            <button type="button" class="btn btn-xs btn-ghost" data-del-gasto="${i}" style="color:var(--danger)">✕</button>
+          </div>`).join('');
+
+        blk.querySelectorAll('[data-gasto-idx]').forEach(row => {
+          const i = Number(row.dataset.gastoIdx);
+          row.querySelector('[data-f="concepto"]').addEventListener('input', e => { gastos[i].concepto = e.target.value; });
+          row.querySelector('[data-f="monto"]').addEventListener('input', e => { gastos[i].monto = valorMonto(e.target.value); actualizarResultado(); });
+          row.querySelector('[data-f="pagadoPor"]').addEventListener('change', e => { gastos[i].pagadoPor = e.target.value; actualizarResultado(); });
+        });
+        blk.querySelectorAll('[data-del-gasto]').forEach(btn => {
+          btn.addEventListener('click', () => { gastos.splice(Number(btn.dataset.delGasto), 1); render(); });
+        });
+      };
+
+      q('#liqTPropietario').addEventListener('change', () => { gastos = []; render(); });
+      q('#liqTMes').addEventListener('change', () => { gastos = []; render(); });
+
+      ctx.overlay.addEventListener('click', (e) => {
+        if (e.target.closest('#btnAddGastoT')) {
+          gastos.push({ concepto: '', monto: 0, pagadoPor: 'gaston' });
+          renderGastos();
+        }
+      });
+
+      render();
+
+      const guardar = async (conPDF) => {
+        const { propietarioId, mes, calc, diffFinal } = calcularConGastos();
+        if (!calc.detalle.length) { toast('No hay cobros para liquidar en ese mes', { tipo: 'warning' }); return; }
+
+        const propietario = dueños.find(d => d.id === propietarioId);
+
+        const data = {
+          propietarioId,
+          propiedadesIds: calc.propiedades.map(p => p.id),
+          mes,
+          pctDueño: calc.pctDueño,
+          pctGaston: calc.pctGaston,
+          totalBase: calc.totalBase,
+          totalExtension: calc.totalExtension,
+          teoricoDueño: calc.teoricoDueño,
+          teoricoGaston: calc.teoricoGaston,
+          realGaston: calc.realGaston,
+          realPropietario: calc.realPropietario,
+          gastos: gastos.filter(g => Number(g.monto) > 0),
+          diffFinal,
+          transferencia: diffFinal === 0 ? null : { desde: diffFinal > 0 ? 'gaston' : 'propietario', monto: Math.abs(diffFinal) },
+          senasIncluidas: calc.senasIncluidas,
+          pagosRestoIncluidos: calc.pagosRestoIncluidos,
+        };
+
+        const liq = await actions.createLiquidacionTemporal(data);
+        if (conPDF && liq) {
+          imprimirLiquidacionTemporal({ liquidacion: liq, propiedades: calc.propiedades, propietario });
+        }
+        toast('Liquidación registrada');
+        ctx.close();
+        onDone?.();
+      };
+
+      q('#btnSoloGuardarLiqT').addEventListener('click', () => guardar(false));
+      q('#btnGuardarPDFLiqT').addEventListener('click', () => guardar(true));
     },
   });
 }

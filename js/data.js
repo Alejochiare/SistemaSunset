@@ -14,7 +14,7 @@ function trySet(key, value) {
 }
 
 function estadoInicial() {
-  return { clientes: [], propietarios: [], propiedades: [], alquileres: [], ventas: [], agenda: [], caja: [], temporales: [], liquidaciones: [] };
+  return { clientes: [], propietarios: [], propiedades: [], alquileres: [], ventas: [], agenda: [], caja: [], temporales: [], liquidaciones: [], liquidacionesTemporales: [] };
 }
 
 function load() {
@@ -94,17 +94,19 @@ function registrarSeniaCajaTemporal(db, t) {
   const delta = Math.round((senia - yaRegistrado) * 100) / 100;
   if (delta > 0) {
     const prop = db.propiedades.find(p => p.id === t.propiedadId);
+    const fecha = hoyISO();
     const mov = crearMovimientoCaja(db, {
       tipo: 'ingreso',
       concepto: `Seña alquiler temporario • ${t.huesped || 'Huésped'} • ${prop ? (prop.nombreTemporal || prop.direccion) : 'Propiedad'}`.trim(),
       monto: delta,
       metodoPago: t.metodoPagoSenia || 'Efectivo',
-      fecha: hoyISO(),
+      fecha,
       origen: 'temporal-senia',
       refTipo: 'temporal',
       refId: t.id,
     });
     t.senaCajaMovimientoIds = [...(t.senaCajaMovimientoIds || []), mov.id];
+    t.fechaSenia = fecha;
   }
   t.senaCajaRegistrada = senia;
 }
@@ -511,23 +513,31 @@ export const api = {
   },
   /** Registra en caja el cobro del saldo restante de una reserva temporal
    *  (lo que no entró como seña), por ejemplo al check-in o check-out. */
-  async registrarCobroRestoTemporal(id, { monto, metodoPago, referencia }) {
+  async registrarCobroRestoTemporal(id, { monto, metodoPago, referencia, cuentaDestino }) {
     const t = _db.temporales.find(x => x.id === id);
     if (!t) return delay(null);
     const prop = _db.propiedades.find(p => p.id === t.propiedadId);
+    const fecha = hoyISO();
     const mov = crearMovimientoCaja(_db, {
       tipo: 'ingreso',
       concepto: `Saldo alquiler temporario • ${t.huesped || 'Huésped'} • ${prop ? (prop.nombreTemporal || prop.direccion) : 'Propiedad'}`.trim(),
       monto: Number(monto || 0),
       metodoPago: metodoPago || 'Efectivo',
       nota: referencia || '',
-      fecha: hoyISO(),
+      fecha,
       origen: 'temporal-resto',
       refTipo: 'temporal',
       refId: t.id,
     });
-    t.restoCajaRegistrado = Math.round(((Number(t.restoCajaRegistrado) || 0) + Number(monto || 0)) * 100) / 100;
-    t.restoCajaMovimientoIds = [...(t.restoCajaMovimientoIds || []), mov.id];
+    t.pagosResto = [...(t.pagosResto || []), {
+      id: uid('pr'),
+      monto: Number(monto || 0),
+      metodoPago: metodoPago || 'Efectivo',
+      referencia: referencia || null,
+      cuentaDestino: cuentaDestino || 'gaston',
+      fecha,
+      cajaMovimientoId: mov.id,
+    }];
     persist(_db);
     return delay(structuredClone(t));
   },
@@ -572,6 +582,20 @@ export const api = {
   },
   async deleteLiquidacion(id) {
     _db.liquidaciones = (_db.liquidaciones || []).filter(x => x.id !== id);
+    persist(_db);
+    return delay(true);
+  },
+
+  /* ---- LIQUIDACIONES TEMPORALES (alquiler temporal: reparto dueño/inmobiliaria + gastos) ---- */
+  async createLiquidacionTemporal(data) {
+    if (!_db.liquidacionesTemporales) _db.liquidacionesTemporales = [];
+    const l = { id: uid('liqt'), fechaCierre: new Date().toISOString(), ...data };
+    _db.liquidacionesTemporales.unshift(l);
+    persist(_db);
+    return delay(structuredClone(l));
+  },
+  async deleteLiquidacionTemporal(id) {
+    _db.liquidacionesTemporales = (_db.liquidacionesTemporales || []).filter(x => x.id !== id);
     persist(_db);
     return delay(true);
   },

@@ -96,6 +96,10 @@ export const actions = {
   async updateLiquidacion(id, p)  { await api.updateLiquidacion(id, p); await refresh(); },
   async deleteLiquidacion(id)     { await api.deleteLiquidacion(id); await refresh(); },
 
+  /* Liquidaciones temporales */
+  async createLiquidacionTemporal(d) { const r = await api.createLiquidacionTemporal(d); await refresh(); return r; },
+  async deleteLiquidacionTemporal(id) { await api.deleteLiquidacionTemporal(id); await refresh(); },
+
   /* Caja */
   async cajaHoy()                        { const r = await api.cajaHoy(); await refresh(); return r; },
   async addMovimiento(cajaId, data)      { await api.addMovimiento(cajaId, data); await refresh(); },
