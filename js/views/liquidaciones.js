@@ -1071,23 +1071,32 @@ export function abrirLiquidacionTemporalModal(onDone, preselectPropietarioId) {
       const q = sel => ctx.overlay.querySelector(sel);
       const bodyEl = q('#liqTBody');
 
+      // Los gastos NO se reembolsan a 70/30 por separado: se restan del bruto
+      // cobrado y recién ese neto es el que se reparte 70/30 (como el resto).
+      // A quien pagó el gasto de su bolsillo se le descuenta de lo que tiene
+      // realmente en su cuenta, antes de comparar contra el teórico.
       const calcularConGastos = () => {
         const propietarioId = q('#liqTPropietario').value;
         const mes = q('#liqTMes').value || mesHoy;
         const calc = calcularLiquidacionTemporal(propietarioId, mes);
-        let ajusteGastos = 0;
-        gastos.forEach(g => {
-          const monto = Number(g.monto) || 0;
-          if (!monto || !g.pagadoPor) return;
-          if (g.pagadoPor === 'gaston') ajusteGastos -= monto * (calc.pctDueño / 100);
-          else ajusteGastos += monto * (calc.pctGaston / 100);
-        });
-        const diffFinal = Math.round((calc.diffBase + ajusteGastos) * 100) / 100;
-        return { propietarioId, mes, calc, ajusteGastos, diffFinal };
+
+        const gastosGaston = gastos.reduce((s, g) => s + (g.pagadoPor === 'gaston' ? (Number(g.monto) || 0) : 0), 0);
+        const gastosPropietario = gastos.reduce((s, g) => s + (g.pagadoPor === 'propietario' ? (Number(g.monto) || 0) : 0), 0);
+        const gastosTotal = gastosGaston + gastosPropietario;
+
+        const bruto = calc.totalBase + calc.totalExtension;
+        const neto = bruto - gastosTotal;
+        const teoricoDueñoNeto = neto * (calc.pctDueño / 100);
+        const teoricoGastonNeto = neto * (calc.pctGaston / 100);
+        const realGastonNeto = calc.realGaston - gastosGaston;
+        const realPropietarioNeto = calc.realPropietario - gastosPropietario;
+
+        const diffFinal = Math.round((realGastonNeto - teoricoGastonNeto) * 100) / 100;
+        return { propietarioId, mes, calc, bruto, gastosTotal, neto, teoricoDueñoNeto, teoricoGastonNeto, realGastonNeto, realPropietarioNeto, diffFinal };
       };
 
       const render = () => {
-        const { propietarioId, mes, calc, ajusteGastos, diffFinal } = calcularConGastos();
+        const { propietarioId, mes, calc, gastosTotal, neto, teoricoDueñoNeto, teoricoGastonNeto, diffFinal } = calcularConGastos();
         const own = dueños.find(d => d.id === propietarioId);
         const nombresProps = calc.propiedades.map(p => p.nombreTemporal || p.direccion).join(', ');
 
@@ -1097,21 +1106,41 @@ export function abrirLiquidacionTemporalModal(onDone, preselectPropietarioId) {
               ${esc(own?.nombre || '—')} · ${calc.propiedades.length} propiedad${calc.propiedades.length !== 1 ? 'es' : ''}: ${esc(nombresProps || '—')}
             </div>
             <div style="font-size:.72rem;color:var(--text-soft);text-transform:uppercase;letter-spacing:.04em;margin-bottom:.6rem">
-              Reparto: ${calc.pctDueño}% dueño / ${calc.pctGaston}% inmobiliaria · incluye la estadía extendida (mismo reparto)
+              Reparto: ${calc.pctDueño}% dueño / ${calc.pctGaston}% inmobiliaria sobre el neto (bruto − gastos) · incluye la estadía extendida
             </div>
             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:.75rem">
-              ${[
-                ['Alquiler (base)', calc.totalBase],
-                ['Estadía extendida', calc.totalExtension],
-                ['Teórico dueño', calc.teoricoDueño],
-                ['Teórico inmobiliaria', calc.teoricoGaston],
-                ['Real en cta. Gastón', calc.realGaston],
-                ['Real en cta. dueño', calc.realPropietario],
-              ].map(([lbl, val]) => `
-                <div>
-                  <div style="font-size:.68rem;color:var(--text-soft)">${lbl}</div>
-                  <div style="font-weight:700">$${Math.round(val).toLocaleString('es-AR')}</div>
-                </div>`).join('')}
+              <div>
+                <div style="font-size:.68rem;color:var(--text-soft)">Alquiler (base)</div>
+                <div style="font-weight:700">$${Math.round(calc.totalBase).toLocaleString('es-AR')}</div>
+              </div>
+              <div>
+                <div style="font-size:.68rem;color:var(--text-soft)">Estadía extendida</div>
+                <div style="font-weight:700">$${Math.round(calc.totalExtension).toLocaleString('es-AR')}</div>
+              </div>
+              <div>
+                <div style="font-size:.68rem;color:var(--text-soft)">Gastos del mes</div>
+                <div id="liqTGastosTotalVal" style="font-weight:700">${gastosTotal ? '−$' + Math.round(gastosTotal).toLocaleString('es-AR') : '$0'}</div>
+              </div>
+              <div>
+                <div style="font-size:.68rem;color:var(--text-soft)">Neto a repartir</div>
+                <div id="liqTNetoVal" style="font-weight:700">$${Math.round(neto).toLocaleString('es-AR')}</div>
+              </div>
+              <div>
+                <div style="font-size:.68rem;color:var(--text-soft)">Teórico dueño</div>
+                <div id="liqTTeoricoDuenoVal" style="font-weight:700">$${Math.round(teoricoDueñoNeto).toLocaleString('es-AR')}</div>
+              </div>
+              <div>
+                <div style="font-size:.68rem;color:var(--text-soft)">Teórico inmobiliaria</div>
+                <div id="liqTTeoricoGastonVal" style="font-weight:700">$${Math.round(teoricoGastonNeto).toLocaleString('es-AR')}</div>
+              </div>
+              <div>
+                <div style="font-size:.68rem;color:var(--text-soft)">Real en cta. Gastón</div>
+                <div style="font-weight:700">$${Math.round(calc.realGaston).toLocaleString('es-AR')}</div>
+              </div>
+              <div>
+                <div style="font-size:.68rem;color:var(--text-soft)">Real en cta. dueño</div>
+                <div style="font-weight:700">$${Math.round(calc.realPropietario).toLocaleString('es-AR')}</div>
+              </div>
             </div>
           </div>
 
@@ -1142,8 +1171,7 @@ export function abrirLiquidacionTemporalModal(onDone, preselectPropietarioId) {
           <div id="liqTGastos" style="margin-bottom:.5rem"></div>
           <button type="button" id="btnAddGastoT" class="btn btn-sm btn-ghost" style="margin-bottom:1rem">${icon('plus')} Agregar gasto</button>
 
-          <div style="border-top:2px solid var(--border);padding-top:.85rem;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.5rem">
-            <div id="liqTAjusteGastos" style="font-size:.82rem;color:var(--text-soft)">${ajusteGastos ? `Ajuste por gastos: ${ajusteGastos > 0 ? '+' : '−'}$${Math.abs(Math.round(ajusteGastos)).toLocaleString('es-AR')}` : ''}</div>
+          <div style="border-top:2px solid var(--border);padding-top:.85rem;display:flex;justify-content:flex-end;align-items:center;flex-wrap:wrap;gap:.5rem">
             <div style="text-align:right">
               <div style="font-size:.72rem;color:var(--text-soft)">Resultado</div>
               <div id="liqTResultadoTexto" style="font-size:1.1rem;font-weight:900;color:${diffFinal === 0 ? 'var(--text-soft)' : 'var(--primary)'}">
@@ -1158,15 +1186,18 @@ export function abrirLiquidacionTemporalModal(onDone, preselectPropietarioId) {
         renderGastos();
       };
 
-      // Recalcula solo el ajuste por gastos y el resultado final, sin reconstruir
-      // los inputs de gastos — así no se pierde el foco mientras se escribe el monto.
+      // Recalcula el neto, el teórico y el resultado final sin reconstruir los
+      // inputs de gastos — así no se pierde el foco mientras se escribe el monto.
       const actualizarResultado = () => {
-        const { ajusteGastos, diffFinal } = calcularConGastos();
-        const ajusteEl = q('#liqTAjusteGastos');
+        const { gastosTotal, neto, teoricoDueñoNeto, teoricoGastonNeto, diffFinal } = calcularConGastos();
+        const set = (id, texto) => { const el = q(id); if (el) el.textContent = texto; };
+
+        set('#liqTGastosTotalVal', gastosTotal ? '−$' + Math.round(gastosTotal).toLocaleString('es-AR') : '$0');
+        set('#liqTNetoVal', '$' + Math.round(neto).toLocaleString('es-AR'));
+        set('#liqTTeoricoDuenoVal', '$' + Math.round(teoricoDueñoNeto).toLocaleString('es-AR'));
+        set('#liqTTeoricoGastonVal', '$' + Math.round(teoricoGastonNeto).toLocaleString('es-AR'));
+
         const resultadoEl = q('#liqTResultadoTexto');
-        if (ajusteEl) {
-          ajusteEl.textContent = ajusteGastos ? `Ajuste por gastos: ${ajusteGastos > 0 ? '+' : '−'}$${Math.abs(Math.round(ajusteGastos)).toLocaleString('es-AR')}` : '';
-        }
         if (resultadoEl) {
           resultadoEl.textContent = diffFinal === 0 ? 'Todo saldado' : diffFinal > 0
             ? `Gastón transfiere $${Math.abs(Math.round(diffFinal)).toLocaleString('es-AR')} al dueño`
@@ -1221,7 +1252,7 @@ export function abrirLiquidacionTemporalModal(onDone, preselectPropietarioId) {
       render();
 
       const guardar = async (conPDF) => {
-        const { propietarioId, mes, calc, diffFinal } = calcularConGastos();
+        const { propietarioId, mes, calc, gastosTotal, neto, teoricoDueñoNeto, teoricoGastonNeto, diffFinal } = calcularConGastos();
         if (!calc.detalle.length) { toast('No hay cobros para liquidar en ese mes', { tipo: 'warning' }); return; }
 
         const propietario = dueños.find(d => d.id === propietarioId);
@@ -1234,8 +1265,10 @@ export function abrirLiquidacionTemporalModal(onDone, preselectPropietarioId) {
           pctGaston: calc.pctGaston,
           totalBase: calc.totalBase,
           totalExtension: calc.totalExtension,
-          teoricoDueño: calc.teoricoDueño,
-          teoricoGaston: calc.teoricoGaston,
+          gastosTotal: Math.round(gastosTotal),
+          neto: Math.round(neto),
+          teoricoDueño: Math.round(teoricoDueñoNeto),
+          teoricoGaston: Math.round(teoricoGastonNeto),
           realGaston: calc.realGaston,
           realPropietario: calc.realPropietario,
           gastos: gastos.filter(g => Number(g.monto) > 0),

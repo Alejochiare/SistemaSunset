@@ -6,7 +6,7 @@ import { icon } from '../config.js';
 import { esc, fmtFechaCorta, fmtMontoInput, valorMonto, parseFechaLocal } from '../lib.js';
 import { openModal } from '../components/modal.js';
 import { toast } from '../components/toast.js';
-import { imprimirReciboTemporal } from '../imprimir.js';
+import { imprimirReciboTemporal, imprimirResumenOcupacion, generarPDFInformeOcupacion } from '../imprimir.js';
 
 const ESTADOS = [
   { id: 'confirmado', label: 'Confirmado', color: 'var(--primary)' },
@@ -82,15 +82,22 @@ function salidaMismoDia(propiedadId, checkIn, excludeId) {
 export default function temporales(root) {
   root.innerHTML = `<div class="view" id="vTemp"></div>`;
 
-  let vista  = 'agenda'; // 'agenda' | 'lista'
+  let vista  = 'agenda'; // 'agenda' | 'lista' | 'informe'
   let filtro = 'activos'; // 'activos' | 'todos' | 'completados' (solo para vista lista)
   const hoyD = new Date();
   let anioAgenda = hoyD.getFullYear();
   let mesAgenda  = hoyD.getMonth(); // 0-indexado
+  let histPropietarioId = null;
+  let histMes = `${hoyD.getFullYear()}-${String(hoyD.getMonth() + 1).padStart(2, '0')}`;
 
-  const render = () => pintarTemporales(root.querySelector('#vTemp'), { vista, filtro, anioAgenda, mesAgenda });
+  const render = () => pintarTemporales(root.querySelector('#vTemp'), { vista, filtro, anioAgenda, mesAgenda, histPropietarioId, histMes });
   render();
   const unsub = subscribe(render);
+
+  root.querySelector('#vTemp').addEventListener('change', e => {
+    if (e.target.id === 'histPropietario') { histPropietarioId = e.target.value; render(); return; }
+    if (e.target.id === 'histMes') { histMes = e.target.value; render(); return; }
+  });
 
   root.querySelector('#vTemp').addEventListener('click', e => {
     if (e.target.closest('#btnNuevoTemp')) { abrirFormTemporal(null, render); return; }
@@ -138,12 +145,34 @@ export default function temporales(root) {
       actions.updateTemporal(id, { estado: estadoId });
       return;
     }
+
+    const btnImprimirInforme = e.target.closest('#btnImprimirInforme');
+    if (btnImprimirInforme) {
+      const propietarioIdActual = root.querySelector('#histPropietario')?.value || histPropietarioId;
+      const mesActual = root.querySelector('#histMes')?.value || histMes;
+      const { propietarios } = getState();
+      const propietario = propietarios.find(p => p.id === propietarioIdActual);
+      const { props, filas } = reservasDelDuenoEnMes(propietarioIdActual, mesActual);
+      imprimirResumenOcupacion({ propietario, mes: mesActual, propiedades: props, filas });
+      return;
+    }
+
+    const btnDescargarInforme = e.target.closest('#btnDescargarInforme');
+    if (btnDescargarInforme) {
+      const propietarioIdActual = root.querySelector('#histPropietario')?.value || histPropietarioId;
+      const mesActual = root.querySelector('#histMes')?.value || histMes;
+      const { propietarios } = getState();
+      const propietario = propietarios.find(p => p.id === propietarioIdActual);
+      const { props, filas } = reservasDelDuenoEnMes(propietarioIdActual, mesActual);
+      descargarInformeTemporal({ propietario, mes: mesActual, propiedades: props, filas });
+      return;
+    }
   });
 
   return unsub;
 }
 
-function pintarTemporales(el, { vista, filtro, anioAgenda, mesAgenda }) {
+function pintarTemporales(el, { vista, filtro, anioAgenda, mesAgenda, histPropietarioId, histMes }) {
   const { temporales } = getState();
   const activos = temporales.filter(t => t.estado === 'activo' || t.estado === 'confirmado');
 
@@ -159,8 +188,9 @@ function pintarTemporales(el, { vista, filtro, anioAgenda, mesAgenda }) {
     <!-- Selector de vista -->
     <div style="display:flex;gap:.5rem;margin-bottom:1.25rem;flex-wrap:wrap">
       ${[
-        { id:'agenda', label:'📅 Agenda' },
-        { id:'lista',  label:'☰ Lista' },
+        { id:'agenda',  label:'📅 Agenda' },
+        { id:'lista',   label:'☰ Lista' },
+        { id:'informe', label:'📋 Informe mensual' },
       ].map(v => {
         const act = vista === v.id;
         return `<button data-vista-temp="${v.id}" style="
@@ -176,6 +206,7 @@ function pintarTemporales(el, { vista, filtro, anioAgenda, mesAgenda }) {
 
   const body = el.querySelector('#vTempBody');
   if (vista === 'agenda') pintarAgenda(body, anioAgenda, mesAgenda);
+  else if (vista === 'informe') pintarInformeTemporal(body, histPropietarioId, histMes);
   else pintarLista(body, filtro);
 }
 
@@ -452,6 +483,163 @@ function renderCard(t, propiedades, hoy) {
         </button>` : ''}
       </div>
     </div>`;
+}
+
+const MESES_LARGO = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+function mesLabelLargo(mes) {
+  if (!mes) return '—';
+  const [y, m] = mes.split('-');
+  return `${MESES_LARGO[+m - 1]} ${y}`;
+}
+
+/** Junta, para un dueño y un mes dados, sus propiedades de alquiler temporal y
+ *  todas las reservas (no canceladas) cuya estadía se superpone con ese mes —
+ *  para armar el informe mensual que se le manda al dueño. */
+function reservasDelDuenoEnMes(propietarioId, mes) {
+  const { propiedades, temporales } = getState();
+  const props = propiedades
+    .filter(p => p.propietarioId === propietarioId && p.habilitadaTemporal)
+    .sort((a, b) => (a.nombreTemporal || a.direccion || '').localeCompare(b.nombreTemporal || b.direccion || '', 'es', { numeric: true }));
+
+  const [anio, mesNum] = (mes || '').split('-').map(Number);
+  const totalDias = anio && mesNum ? new Date(anio, mesNum, 0).getDate() : 30;
+  const primerDiaMes = `${mes}-01`;
+  const ultimoDiaMes = `${mes}-${String(totalDias).padStart(2, '0')}`;
+  const limite = siguienteDiaISO(ultimoDiaMes);
+
+  const filas = [];
+  props.forEach(prop => {
+    temporales
+      .filter(t => t.propiedadId === prop.id && t.estado !== 'cancelado' && t.checkIn && t.checkOut)
+      .filter(t => t.checkOut > primerDiaMes && t.checkIn < limite)
+      .forEach(t => filas.push({ prop, t }));
+  });
+  filas.sort((a, b) =>
+    (a.prop.nombreTemporal || a.prop.direccion || '').localeCompare(b.prop.nombreTemporal || b.prop.direccion || '', 'es', { numeric: true })
+    || a.t.checkIn.localeCompare(b.t.checkIn));
+
+  return { props, filas, totalDias, primerDiaMes, limite };
+}
+
+/** Genera el PDF del informe y lo descarga directo (sin abrir ventana de impresión). */
+async function descargarInformeTemporal({ propietario, mes, propiedades, filas }) {
+  try {
+    const blob = await generarPDFInformeOcupacion({ propietario, mes, propiedades, filas });
+    const nombreArchivo = `Informe ${mesLabelLargo(mes)} - ${propietario?.nombre || 'propiedad'}.pdf`.replace(/[\\/:*?"<>|]/g, '');
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = nombreArchivo;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (err) {
+    console.warn('No se pudo generar el PDF del informe:', err);
+    toast('No se pudo generar el PDF (revisá la conexión a internet)', { tipo: 'danger' });
+  }
+}
+
+/* ── Vista Informe mensual: resumen de ocupación para mandarle al dueño ── */
+function pintarInformeTemporal(el, propietarioIdSel, mesSel) {
+  const { propietarios, propiedades } = getState();
+  const propsTemp = propiedades.filter(p => p.habilitadaTemporal && p.propietarioId);
+  const dueñosIds = [...new Set(propsTemp.map(p => p.propietarioId))];
+  const dueños = dueñosIds
+    .map(id => propietarios.find(p => p.id === id))
+    .filter(Boolean)
+    .sort((a, b) => (a.nombre || '').localeCompare(b.nombre || '', 'es'));
+
+  if (!dueños.length) {
+    el.innerHTML = `
+    <div class="card" style="padding:2.5rem;text-align:center;color:var(--text-faint)">
+      <div style="font-size:2rem;margin-bottom:.5rem">📋</div>
+      <div style="font-weight:600;margin-bottom:.25rem">No hay propiedades de alquiler temporal con dueño asignado</div>
+    </div>`;
+    return;
+  }
+
+  const propietarioId = propietarioIdSel && dueños.some(d => d.id === propietarioIdSel) ? propietarioIdSel : dueños[0].id;
+  const own = dueños.find(d => d.id === propietarioId);
+  const { props, filas, totalDias, primerDiaMes, limite } = reservasDelDuenoEnMes(propietarioId, mesSel);
+
+  const nochesPorProp = {};
+  const totalPorProp = {};
+  props.forEach(p => { nochesPorProp[p.id] = 0; totalPorProp[p.id] = 0; });
+  filas.forEach(({ prop, t }) => {
+    const desde = t.checkIn < primerDiaMes ? primerDiaMes : t.checkIn;
+    const hasta = t.checkOut > limite ? limite : t.checkOut;
+    const n = Math.max(0, Math.round((parseFechaLocal(hasta) - parseFechaLocal(desde)) / 86400000));
+    nochesPorProp[prop.id] += n;
+    totalPorProp[prop.id] += totalReserva(t);
+  });
+  const totalGeneral = props.reduce((s, p) => s + (totalPorProp[p.id] || 0), 0);
+
+  el.innerHTML = `
+    <div class="form-grid" style="margin-bottom:1rem">
+      <div class="form-group">
+        <label>Dueño</label>
+        <select id="histPropietario">${dueños.map(d => `<option value="${d.id}" ${d.id === propietarioId ? 'selected' : ''}>${esc(d.nombre)}</option>`).join('')}</select>
+      </div>
+      <div class="form-group">
+        <label>Mes</label>
+        <input id="histMes" type="month" value="${mesSel}">
+      </div>
+    </div>
+
+    <div class="card" style="padding:1rem 1.25rem;margin-bottom:1rem">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.6rem">
+        <div>
+          <div style="font-weight:700;font-size:1.05rem">${esc(own?.nombre || '—')}</div>
+          <div style="font-size:.8rem;color:var(--text-soft);text-transform:capitalize">${mesLabelLargo(mesSel)} · ${props.length} propiedad${props.length !== 1 ? 'es' : ''}</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:.68rem;color:var(--text-soft);text-transform:uppercase;letter-spacing:.04em">Total facturado</div>
+          <div style="font-size:1.2rem;font-weight:900;color:var(--primary)">$${Math.round(totalGeneral).toLocaleString('es-AR')}</div>
+        </div>
+        <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+          <button class="btn btn-ghost" id="btnImprimirInforme">${icon('file')} Imprimir / PDF</button>
+          <button class="btn btn-primary" id="btnDescargarInforme">${icon('download')} Descargar PDF</button>
+        </div>
+      </div>
+    </div>
+
+    ${props.map(p => {
+      const nn = nochesPorProp[p.id] || 0;
+      const filasProp = filas.filter(f => f.prop.id === p.id);
+      return `
+      <div class="card" style="margin-bottom:1rem">
+        <div class="card-head">
+          <h3>${esc(p.nombreTemporal || p.direccion)}</h3>
+          <div style="display:flex;gap:.4rem;flex-wrap:wrap;align-items:center">
+            <span class="badge badge-info">${nn} / ${totalDias} noches ocupadas</span>
+            <span class="badge badge-success">$${Math.round(totalPorProp[p.id] || 0).toLocaleString('es-AR')}</span>
+          </div>
+        </div>
+        ${filasProp.length ? `
+        <div style="padding:0">
+          ${filasProp.map(({ t }) => {
+            const total = totalReserva(t);
+            const { senia, resta } = saldoReserva(t);
+            return `
+            <div class="list-row">
+              <div class="list-info">
+                <div class="list-name">${esc(t.huesped || '—')}</div>
+                <div class="text-xs text-soft">
+                  ${fmtFechaCorta(t.checkIn)} → ${fmtFechaCorta(t.checkOut)} · ${noches(t)} noche${noches(t) !== 1 ? 's' : ''} · ${estadoInfo(t.estado).label}
+                  ${t.precioPorNoche ? ` · $${Number(t.precioPorNoche).toLocaleString('es-AR')}/noche` : ''}
+                  ${t.extension ? ` · +estadía extendida${t.montoExtension ? ' ($' + Number(t.montoExtension).toLocaleString('es-AR') + ')' : ''}` : ''}
+                </div>
+              </div>
+              <div style="text-align:right;flex-shrink:0">
+                <div style="font-weight:700;color:var(--primary)">${total ? '$' + Math.round(total).toLocaleString('es-AR') : '—'}</div>
+                ${senia ? `<div style="font-size:.7rem;color:var(--text-soft)">Seña: $${senia.toLocaleString('es-AR')}</div>` : ''}
+                ${resta > 0 ? `<div style="font-size:.7rem;color:var(--warning)">Resta: $${resta.toLocaleString('es-AR')}</div>` : ''}
+              </div>
+            </div>`;
+          }).join('')}
+        </div>` : `<div class="empty-sm" style="padding:.9rem 1.1rem;color:var(--text-faint);font-size:.85rem">Sin reservas este mes</div>`}
+      </div>`;
+    }).join('')}
+  `;
 }
 
 /* ---- Detalle del contrato (se abre al tocar una celda de la agenda) ---- */

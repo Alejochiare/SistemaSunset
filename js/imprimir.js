@@ -7,6 +7,7 @@ const KEY_NUM_REC  = 'inmocrm_num_recibo';
 const KEY_NUM_LIQ  = 'inmocrm_num_liquidacion';
 const KEY_NUM_DEUDA = 'inmocrm_num_deuda';
 const KEY_NUM_LIQT = 'inmocrm_num_liquidacion_temporal';
+const KEY_NUM_INFORME = 'inmocrm_num_informe_ocupacion';
 
 /* ── Agencia config ──────────────────────────────────────── */
 export function getAgencia() {
@@ -190,7 +191,7 @@ function abrirVentana(titulo, cuerpo) {
 }
 
 /* ── Header común del documento ──────────────────────────── */
-function headerDoc(ag, tipo, num, fecha) {
+function headerDoc(ag, tipo, num, fecha, logoUrl) {
   const nombre = ag.nombre || 'Inmobiliaria';
   const cuit   = ag.cuit   || '';
   const dir    = [ag.direccion, ag.localidad].filter(Boolean).join(' | ');
@@ -199,12 +200,15 @@ function headerDoc(ag, tipo, num, fecha) {
 
   return `
   <div class="doc-header">
-    <div>
-      <div class="agencia-logo">${esc(nombre)}</div>
-      <div class="agencia-sub">${esc(iva)}</div>
-      <div class="agencia-info" style="margin-top:4px">
-        ${dir ? esc(dir) + '<br>' : ''}
-        ${tel ? 'Tel: ' + esc(tel) : ''}
+    <div style="display:flex;align-items:center;gap:10px">
+      ${logoUrl ? `<img src="${logoUrl}" style="height:44px;width:auto;object-fit:contain;flex-shrink:0">` : ''}
+      <div>
+        <div class="agencia-logo">${esc(nombre)}</div>
+        <div class="agencia-sub">${esc(iva)}</div>
+        <div class="agencia-info" style="margin-top:4px">
+          ${dir ? esc(dir) + '<br>' : ''}
+          ${tel ? 'Tel: ' + esc(tel) : ''}
+        </div>
       </div>
     </div>
 
@@ -649,7 +653,8 @@ export function imprimirLiquidacionTemporal({ liquidacion: l, propiedades = [], 
     ? propiedades.map(p => p.nombreTemporal || p.direccion).join(', ')
     : '—';
   const gastos = l.gastos || [];
-  const totalGastos = gastos.reduce((s, g) => s + (Number(g.monto) || 0), 0);
+  const totalGastos = l.gastosTotal ?? gastos.reduce((s, g) => s + (Number(g.monto) || 0), 0);
+  const neto = l.neto ?? ((l.totalBase || 0) + (l.totalExtension || 0) - totalGastos);
   const transferencia = l.transferencia;
 
   const copia = (tipoCop) => `
@@ -674,24 +679,20 @@ export function imprimirLiquidacionTemporal({ liquidacion: l, propiedades = [], 
       <tbody>
         <tr><td>Alquiler cobrado en el período</td><td class="right">${fmtMoneda(l.totalBase)}</td></tr>
         <tr><td>Estadía extendida cobrada</td><td class="right">${fmtMoneda(l.totalExtension)}</td></tr>
-        <tr><td>Teórico dueño (${l.pctDueño}% del alquiler y la extensión)</td><td class="right">${fmtMoneda(l.teoricoDueño)}</td></tr>
-        <tr><td>Teórico inmobiliaria (${l.pctGaston}% del alquiler y la extensión)</td><td class="right">${fmtMoneda(l.teoricoGaston)}</td></tr>
-        <tr><td>Real recibido en cuenta de la inmobiliaria</td><td class="right">${fmtMoneda(l.realGaston)}</td></tr>
-        <tr><td>Real recibido en cuenta del dueño</td><td class="right">${fmtMoneda(l.realPropietario)}</td></tr>
         ${gastos.map(g => `
         <tr>
           <td>Gasto: ${esc(g.concepto || 'Sin concepto')} (pagado por ${g.pagadoPor === 'gaston' ? 'la inmobiliaria' : 'el dueño'})</td>
-          <td class="right">${fmtMoneda(g.monto)}</td>
+          <td class="right">− ${fmtMoneda(g.monto)}</td>
         </tr>`).join('')}
+        <tr><td><strong>Neto a repartir (bruto − gastos)</strong></td><td class="right"><strong>${fmtMoneda(neto)}</strong></td></tr>
+        <tr><td>Teórico dueño (${l.pctDueño}% del neto)</td><td class="right">${fmtMoneda(l.teoricoDueño)}</td></tr>
+        <tr><td>Teórico inmobiliaria (${l.pctGaston}% del neto)</td><td class="right">${fmtMoneda(l.teoricoGaston)}</td></tr>
+        <tr><td>Real recibido en cuenta de la inmobiliaria</td><td class="right">${fmtMoneda(l.realGaston)}</td></tr>
+        <tr><td>Real recibido en cuenta del dueño</td><td class="right">${fmtMoneda(l.realPropietario)}</td></tr>
       </tbody>
     </table>
 
     <div class="totales">
-      ${totalGastos > 0 ? `
-      <div class="total-row">
-        <div class="total-label">Total gastos del mes:</div>
-        <div class="total-val">${fmtMoneda(totalGastos)}</div>
-      </div>` : ''}
       <div class="total-row grand">
         <div class="total-label">${transferencia ? (transferencia.desde === 'gaston' ? 'INMOBILIARIA TRANSFIERE AL DUEÑO' : 'DUEÑO TRANSFIERE A LA INMOBILIARIA') : 'RESULTADO'}:</div>
         <div class="total-val">${transferencia ? fmtMoneda(transferencia.monto) : 'Saldado — sin transferencia'}</div>
@@ -715,4 +716,138 @@ export function imprimirLiquidacionTemporal({ liquidacion: l, propiedades = [], 
     <div class="separador">· · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · ·</div>
     ${copia('DUPLICADO')}
   `);
+}
+
+/* ============================================================
+   INFORME MENSUAL DE OCUPACIÓN (alquiler temporal)
+   Resumen informativo para mandarle al dueño de las propiedades:
+   qué reservas hubo, con quién, qué fechas y cuántas noches.
+   No es un comprobante fiscal — una sola copia, sin firma.
+   { propietario, mes, propiedades, filas: [{ prop, t }] }
+   ============================================================ */
+function construirResumenOcupacionHTML({ propietario, mes, propiedades = [], filas = [] }) {
+  const ag  = getAgencia();
+  const num = fmtDocNum(nextNum(KEY_NUM_INFORME));
+  const fecha = new Date().toISOString().slice(0, 10);
+
+  const nochesDe = (t) => {
+    if (!t.checkIn || !t.checkOut) return 0;
+    const a = new Date(t.checkIn.slice(0, 10) + 'T00:00:00');
+    const b = new Date(t.checkOut.slice(0, 10) + 'T00:00:00');
+    return Math.max(0, Math.round((b - a) / 86400000));
+  };
+  const totalDe = (t) => (t.precioTotal || (nochesDe(t) * (t.precioPorNoche || 0))) + (t.montoExtension || 0);
+
+  let totalGeneral = 0;
+  const logoUrl = `${location.origin}/logooo.png`;
+
+  const cuerpo = `
+  <div class="copia">
+    ${headerDoc(ag, 'INFORME', num, fecha, logoUrl)}
+
+    <div class="banda-concepto">
+      RESUMEN DE OCUPACIÓN — ALQUILER TEMPORARIO · ${mesLabel(mes)}
+    </div>
+
+    <div class="cliente-blk">
+      <div class="dato-fld" style="grid-column:1/-1"><span class="lbl">Propietario:</span> <strong>${esc(propietario?.nombre || '—')}</strong></div>
+    </div>
+
+    ${propiedades.map(prop => {
+      const items = filas.filter(f => f.prop.id === prop.id);
+      const subtotal = items.reduce((s, { t }) => s + totalDe(t), 0);
+      totalGeneral += subtotal;
+      return `
+      <div class="contrato-blk">
+        <div class="contrato-titulo">${esc(prop.nombreTemporal || prop.direccion || 'Propiedad')}</div>
+        ${items.length ? `
+        <table class="tabla">
+          <thead><tr>
+            <th>Huésped</th>
+            <th>Check-in</th>
+            <th>Check-out</th>
+            <th class="right">Noches</th>
+            <th class="right">$/noche</th>
+            <th>Estadía extendida</th>
+            <th class="right">Total</th>
+            <th class="right">Seña</th>
+          </tr></thead>
+          <tbody>
+            ${items.map(({ t }) => `
+            <tr>
+              <td>${esc(t.huesped || '—')}</td>
+              <td>${fmtFecha(t.checkIn)}</td>
+              <td>${fmtFecha(t.checkOut)}</td>
+              <td class="right">${nochesDe(t)}</td>
+              <td class="right">${t.precioPorNoche ? fmtMoneda(t.precioPorNoche) : '—'}</td>
+              <td>${t.extension ? `Sí, hasta las ${esc(t.horaCheckOutExtendido || '—')}${t.montoExtension ? ` (${fmtMoneda(t.montoExtension)})` : ''}` : '—'}</td>
+              <td class="right">${fmtMoneda(totalDe(t))}</td>
+              <td class="right">${t.senia ? fmtMoneda(t.senia) : '—'}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+        <div style="text-align:right;font-size:10px;font-weight:700;margin-top:2px">Subtotal ${esc(prop.nombreTemporal || prop.direccion)}: ${fmtMoneda(subtotal)}</div>
+        ` : `<div style="font-size:10px;color:#888;padding:6px 0">Sin reservas este mes.</div>`}
+      </div>`;
+    }).join('')}
+
+    <div class="totales">
+      <div class="total-row grand">
+        <div class="total-label">TOTAL FACTURADO:</div>
+        <div class="total-val">${fmtMoneda(totalGeneral)}</div>
+      </div>
+    </div>
+
+    <div class="firma-blk" style="border-top:1px solid #ccc;margin-top:10px;padding-top:6px">
+      <div style="font-size:9px;color:#888">Informe generado el ${fmtFecha(fecha)} · uso informativo, no es un comprobante fiscal.</div>
+    </div>
+  </div>`;
+
+  return cuerpo;
+}
+
+/** Abre la ventana de impresión de siempre (para "Imprimir / Guardar PDF" manual). */
+export function imprimirResumenOcupacion(datos) {
+  abrirVentana('Resumen de Ocupación', construirResumenOcupacionHTML(datos));
+}
+
+/** Genera el PDF del informe como Blob real (para compartirlo, ej. por WhatsApp),
+ *  usando html2pdf.js (cargado por CDN en index.html) sobre un iframe oculto para
+ *  no mezclar los estilos de impresión con los del resto de la app. */
+export function generarPDFInformeOcupacion(datos) {
+  const cuerpo = construirResumenOcupacionHTML(datos);
+  return generarPDFBlobDesdeHTML(cuerpo);
+}
+
+function generarPDFBlobDesdeHTML(cuerpoHTML) {
+  return new Promise((resolve, reject) => {
+    if (typeof html2pdf === 'undefined') {
+      reject(new Error('html2pdf no está disponible (revisá la conexión a internet)'));
+      return;
+    }
+    const iframe = document.createElement('iframe');
+    iframe.style.cssText = 'position:fixed;left:-10000px;top:0;width:210mm;height:297mm;border:0';
+    document.body.appendChild(iframe);
+
+    const limpiar = () => { iframe.remove(); };
+
+    const doc = iframe.contentDocument;
+    doc.open();
+    doc.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><style>${CSS_PRINT}</style></head><body><div class="pagina">${cuerpoHTML}</div></body></html>`);
+    doc.close();
+
+    setTimeout(() => {
+      html2pdf()
+        .from(doc.body)
+        .set({
+          margin: 5,
+          filename: 'informe.pdf',
+          jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+          html2canvas: { scale: 2, useCORS: true },
+        })
+        .outputPdf('blob')
+        .then(blob => { limpiar(); resolve(blob); })
+        .catch(err => { limpiar(); reject(err); });
+    }, 60);
+  });
 }

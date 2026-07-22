@@ -7,19 +7,12 @@
 import { openModal, confirmar } from '../components/modal.js';
 import { toast } from '../components/toast.js';
 import { sel, actions } from '../store.js';
-import { $, $$, esc, fmtMoneda, iniciales, colorDe, fmtFecha, fmtFechaCorta, relativo } from '../lib.js';
+import { $, $$, esc, fmtMoneda, iniciales, colorDe, fmtFecha, fmtFechaCorta, relativo, waLink } from '../lib.js';
 import { estadoById, TIPOS_ACTIVIDAD, icon } from '../config.js';
 import { openLeadForm, openTareaForm, openActividadForm } from './forms.js';
 import { navegar } from '../router.js';
 
-/** Construye un enlace wa.me con texto pre-cargado (formato AR: 549...) */
-export function waLink(numero, texto = '') {
-  let n = String(numero || '').replace(/\D/g, '');
-  if (!n) return null;
-  if (!n.startsWith('54')) n = '549' + n;          // celular Argentina
-  else if (!n.startsWith('549')) n = '54' + '9' + n.slice(2);
-  return `https://wa.me/${n}${texto ? `?text=${encodeURIComponent(texto)}` : ''}`;
-}
+export { waLink };
 
 function heatBar(score) {
   const { clase } = sel.heatLabel(score);
