@@ -1,117 +1,124 @@
 /* ============================================================
-   VIEW · TAREAS
-   Lista global de tareas con filtros, alertas de vencimiento
-   y completado en 1 clic.
+   VISTA · Tareas pendientes — listado global de tareas (problemas/
+   incidencias y mantenimiento) creadas desde Alquileres y Temporales.
    ============================================================ */
-import { sel, actions, getState, subscribe } from '../store.js';
-import { $, $$, esc, fmtFechaCorta, esHoy, relativo } from '../lib.js';
-import { PRIORIDADES, icon } from '../config.js';
-import { openModal, confirmar } from '../components/modal.js';
-import { toast } from '../components/toast.js';
+import { getState, sel, actions, subscribe } from '../store.js';
+import { icon, ESTADOS_TAREA } from '../config.js';
+import { esc, fmtFechaCorta, debounce } from '../lib.js';
+import { navegar } from '../router.js';
 import { openTareaForm } from './forms.js';
-import { openLeadDetail } from './leadDetail.js';
 
-const filtros = { estado: 'pendientes', prioridad: '', responsable: '' };
+export default function tareas(root) {
+  root.innerHTML = `<div class="view" id="vTareas"></div>`;
+  let tab = 'pendientes'; // 'pendientes' | 'vencidas' | 'todas'
+  let filtro = '';
 
-function clasificar(t) {
-  const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
-  if (t.completada) return 'completada';
-  return new Date(t.fecha) < hoy ? 'vencida' : 'pendiente';
+  const render = () => pintarTareas(root.querySelector('#vTareas'), tab, filtro);
+  render();
+  const unsub = subscribe(render);
+
+  root.querySelector('#vTareas').addEventListener('click', (e) => {
+    if (e.target.closest('#btnNuevaTarea')) { openTareaForm(null, () => {}); return; }
+
+    const tb = e.target.closest('[data-tab]');
+    if (tb) { tab = tb.dataset.tab; render(); return; }
+
+    const editar = e.target.closest('[data-editar-tarea]');
+    if (editar) {
+      const t = getState().tareas.find(x => x.id === editar.dataset.editarTarea);
+      if (t) openTareaForm(t, () => {});
+      return;
+    }
+    const eliminar = e.target.closest('[data-eliminar-tarea]');
+    if (eliminar) {
+      if (confirm('¿Eliminar esta tarea?')) actions.deleteTarea(eliminar.dataset.eliminarTarea);
+      return;
+    }
+    const ir = e.target.closest('[data-ir]');
+    if (ir) { navegar(ir.dataset.ir); return; }
+  });
+
+  root.querySelector('#vTareas').addEventListener('input', debounce((e) => {
+    if (e.target.id === 'buscarTarea') { filtro = e.target.value.toLowerCase(); render(); }
+  }, 150));
+
+  return unsub;
 }
 
-function pasa(t) {
-  const c = clasificar(t);
-  if (filtros.estado === 'pendientes' && t.completada) return false;
-  if (filtros.estado === 'vencidas' && c !== 'vencida') return false;
-  if (filtros.estado === 'completadas' && !t.completada) return false;
-  if (filtros.prioridad && t.prioridad !== filtros.prioridad) return false;
-  if (filtros.responsable && t.responsable !== filtros.responsable) return false;
-  return true;
-}
+function pintarTareas(el, tab, filtro) {
+  const { tareas: todas, clientes, propiedades, temporales } = getState();
+  const pendientes = sel.tareasPendientes();
+  const vencidas    = sel.tareasVencidas();
+  const base = tab === 'vencidas' ? vencidas : tab === 'todas' ? todas : pendientes;
 
-function taskHTML(t) {
-  const c = clasificar(t);
-  const lead = sel.lead(t.leadId);
-  return `<div class="task-item ${t.completada ? 'done' : ''} ${c === 'vencida' ? 'overdue' : ''}" data-id="${t.id}">
-    <div class="task-check ${t.completada ? 'checked' : ''}" data-toggle="${t.id}">${icon('check')}</div>
-    <div class="task-info" data-lead="${t.leadId}" style="cursor:pointer">
-      <div class="task-title">${esc(t.titulo)}</div>
-      <div class="task-meta">
-        ${lead ? `<span>${icon('users')} ${esc(lead.nombre)}</span>` : ''}
-        <span><span class="prio-dot prio-${t.prioridad}"></span> ${t.prioridad}</span>
-        <span>${icon('clock')} ${esHoy(t.fecha) ? 'Hoy' : fmtFechaCorta(t.fecha)} ${t.hora || ''}</span>
-        <span>${icon('users')} ${esc(sel.nombreAsesor(t.responsable))}</span>
-        ${c === 'vencida' ? `<span style="color:var(--danger);font-weight:700">Vencida ${relativo(t.fecha)}</span>` : ''}
+  const lista = base
+    .filter(t => !filtro || `${t.titulo} ${t.asignadoA||''}`.toLowerCase().includes(filtro))
+    .slice()
+    .sort((a, b) => (a.fecha||'').localeCompare(b.fecha||''));
+
+  el.innerHTML = `
+    <div class="view-head">
+      <div>
+        <h1 class="view-title">Tareas pendientes</h1>
+        <p class="view-sub">${pendientes.length} pendiente${pendientes.length!==1?'s':''} · ${vencidas.length} vencida${vencidas.length!==1?'s':''}</p>
+      </div>
+      <button class="btn btn-primary" id="btnNuevaTarea">${icon('plus')} Nueva tarea</button>
+    </div>
+
+    <div class="tabs" style="margin-bottom:1rem">
+      <button class="tab ${tab==='pendientes'?'active':''}" data-tab="pendientes">Pendientes (${pendientes.length})</button>
+      <button class="tab ${tab==='vencidas'?'active':''}" data-tab="vencidas">Vencidas (${vencidas.length})</button>
+      <button class="tab ${tab==='todas'?'active':''}" data-tab="todas">Todas (${todas.length})</button>
+    </div>
+
+    <div class="toolbar">
+      <div class="search-bar">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        <input id="buscarTarea" placeholder="Buscar por título o responsable…" value="${esc(filtro)}">
       </div>
     </div>
-    <div class="flex gap-2">
-      <button class="btn btn-sm btn-ghost btn-icon-only" data-edit="${t.id}" title="Editar">${icon('edit')}</button>
-      <button class="btn btn-sm btn-ghost btn-icon-only" data-del="${t.id}" title="Eliminar">${icon('trash')}</button>
-    </div>
-  </div>`;
+
+    ${lista.length ? `
+    <div class="card" style="padding:0">
+      ${lista.map(t => renderFila(t, { clientes, propiedades, temporales })).join('')}
+    </div>` : `
+    <div class="empty">
+      ${icon('alert')}
+      <h3>No hay tareas${filtro ? ' con ese criterio' : tab==='vencidas' ? ' vencidas' : tab==='pendientes' ? ' pendientes' : ''}</h3>
+      <p>${filtro ? 'Probá con otro término.' : 'Se cargan desde el detalle de un contrato de Alquileres o desde Temporales → Mantenimiento.'}</p>
+    </div>`}`;
 }
 
-export default async function tareas(root) {
-  const asesores = getState().usuarios.filter(u => ['asesor','gerente','administrador'].includes(u.rol));
+function renderFila(t, { clientes, propiedades, temporales }) {
+  const estadoObj = ESTADOS_TAREA.find(e => e.id === t.estado);
+  const hoy = new Date().toISOString().slice(0, 10);
+  const vencida = t.estado === 'pendiente' && t.fecha && t.fecha < hoy;
+  const cliente = t.clienteId   ? clientes.find(c => c.id === t.clienteId)     : null;
+  const prop    = t.propiedadId ? propiedades.find(p => p.id === t.propiedadId) : null;
+  const reserva = t.temporalId  ? temporales.find(x => x.id === t.temporalId)   : null;
+  const ruta = t.origen === 'alquiler' && t.alquilerId ? `alquileres/${t.alquilerId}`
+    : t.temporalId ? `temporales/${t.temporalId}`
+    : 'temporales';
 
-  function render() {
-    const lista = getState().tareas.filter(pasa)
-      .sort((a, b) => new Date(a.fecha) - new Date(b.fecha));
-    const vencidas = sel.tareasVencidas().length;
+  const partes = [
+    fmtFechaCorta(t.fecha) + (t.hora ? ' · ' + t.hora : ''),
+    t.origen === 'alquiler' ? 'Alquileres' : 'Temporales',
+    cliente?.nombre,
+    reserva?.huesped,
+    prop?.direccion,
+    t.asignadoA ? '👤 ' + t.asignadoA : null,
+  ].filter(Boolean).join(' · ');
 
-    root.innerHTML = `
-      <div class="view">
-        <div class="page-head">
-          <div class="page-title-wrap">
-            <h1>Tareas</h1>
-            <div class="subtitle">${vencidas ? `Tenés <strong style="color:var(--danger)">${vencidas} tareas vencidas</strong> que requieren acción.` : 'Todo bajo control, sin tareas vencidas.'}</div>
-          </div>
-          <button class="btn btn-primary" id="newTask">${icon('plus')} Nueva tarea</button>
-        </div>
-
-        <div class="toolbar">
-          <div class="seg" id="segEstado">
-            ${[['pendientes','Pendientes'],['vencidas','Vencidas'],['completadas','Completadas'],['','Todas']]
-              .map(([v, l]) => `<button data-v="${v}" class="${filtros.estado === v ? 'active' : ''}">${l}</button>`).join('')}
-          </div>
-          <select class="field" id="fPrio">
-            <option value="">Toda prioridad</option>
-            ${PRIORIDADES.map(p => `<option value="${p}" ${filtros.prioridad === p ? 'selected' : ''}>${p}</option>`).join('')}
-          </select>
-          <select class="field" id="fResp">
-            <option value="">Todos los responsables</option>
-            ${asesores.map(u => `<option value="${u.id}" ${filtros.responsable === u.id ? 'selected' : ''}>${esc(u.nombre)}</option>`).join('')}
-          </select>
-        </div>
-
-        <div id="taskList">
-          ${lista.length ? lista.map(taskHTML).join('') : `<div class="empty">${icon('check')}<h3>No hay tareas para mostrar</h3><p>Probá cambiar los filtros o creá una nueva.</p></div>`}
-        </div>
-      </div>`;
-
-    // filtros
-    $$('#segEstado button', root).forEach(b => b.addEventListener('click', () => { filtros.estado = b.dataset.v; render(); }));
-    $('#fPrio', root).addEventListener('change', e => { filtros.prioridad = e.target.value; render(); });
-    $('#fResp', root).addEventListener('change', e => { filtros.responsable = e.target.value; render(); });
-    $('#newTask', root).addEventListener('click', () => openTareaForm(null, null, null));
-
-    // acciones por tarea
-    $$('[data-toggle]', root).forEach(c => c.addEventListener('click', async () => {
-      const t = getState().tareas.find(x => x.id === c.dataset.toggle);
-      await actions.toggleTarea(t.id, !t.completada);
-    }));
-    $$('[data-edit]', root).forEach(b => b.addEventListener('click', () => {
-      const t = getState().tareas.find(x => x.id === b.dataset.edit);
-      openTareaForm(t.leadId, t, null);
-    }));
-    $$('[data-del]', root).forEach(b => b.addEventListener('click', async () => {
-      const ok = await confirmar({ title: 'Eliminar tarea', mensaje: '¿Seguro que querés eliminar esta tarea?', okLabel: 'Eliminar', danger: true });
-      if (ok) { await actions.deleteTarea(b.dataset.del); toast('Tarea eliminada'); }
-    }));
-    $$('[data-lead]', root).forEach(n => n.addEventListener('click', () => openLeadDetail(n.dataset.lead)));
-  }
-
-  render();
-  const unsub = subscribe(() => render());
-  return () => unsub();
+  return `
+    <div class="list-row list-row-hover" data-ir="${ruta}" style="cursor:pointer">
+      <div class="list-info" style="flex:1;min-width:0">
+        <div class="list-name">${esc(t.titulo)}${vencida ? ' <span class="badge badge-danger" style="font-size:.65rem">Vencida</span>' : ''}</div>
+        <div class="text-xs text-soft truncate">${esc(partes)}</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:.5rem;flex-shrink:0">
+        <span class="badge ${estadoObj?.badge || 'badge-neutral'}">${estadoObj?.label || t.estado}</span>
+        <button class="btn btn-xs btn-ghost" data-editar-tarea="${t.id}" title="Editar" onclick="event.stopPropagation()">${icon('edit')}</button>
+        <button class="btn btn-xs btn-ghost" data-eliminar-tarea="${t.id}" title="Eliminar" onclick="event.stopPropagation()" style="color:var(--danger)">${icon('trash')}</button>
+      </div>
+    </div>`;
 }

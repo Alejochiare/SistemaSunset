@@ -19,7 +19,7 @@ function guardarSiteSettings(s) {
 }
 
 const state = {
-  clientes: [], propietarios: [], propiedades: [], alquileres: [], ventas: [], agenda: [], caja: [], temporales: [], liquidaciones: [],
+  clientes: [], propietarios: [], propiedades: [], alquileres: [], ventas: [], agenda: [], caja: [], temporales: [], liquidaciones: [], tareas: [],
   siteSettings: leerSiteSettings(),
   loaded: false,
 };
@@ -91,6 +91,11 @@ export const actions = {
   async updateTemporal(id, p)  { await api.updateTemporal(id, p); await refresh(); },
   async deleteTemporal(id)     { await api.deleteTemporal(id); await refresh(); },
   async registrarCobroRestoTemporal(id, pago) { await api.registrarCobroRestoTemporal(id, pago); await refresh(); },
+
+  /* Tareas (problemas/incidencias y mantenimiento) */
+  async createTarea(d)      { await api.createTarea(d); await refresh(); },
+  async updateTarea(id, p)  { await api.updateTarea(id, p); await refresh(); },
+  async deleteTarea(id)     { await api.deleteTarea(id); await refresh(); },
 
   /* Liquidaciones */
   async createLiquidacion(d)      { const r = await api.createLiquidacion(d); await refresh(); return r; },
@@ -283,6 +288,39 @@ export const sel = {
     return state.agenda.filter(e => !e.completado && e.fecha >= hoy).sort((a,b) => a.fecha.localeCompare(b.fecha));
   },
 
+  /* ---- Tareas (problemas/incidencias y mantenimiento) ---- */
+  tareasDeAlquiler(alquilerId) {
+    return state.tareas.filter(t => t.alquilerId === alquilerId).sort((a, b) => (b.fecha||'').localeCompare(a.fecha||''));
+  },
+  tareasDeTemporal(temporalId) {
+    return state.tareas.filter(t => t.temporalId === temporalId).sort((a, b) => (b.fecha||'').localeCompare(a.fecha||''));
+  },
+  /** Tareas de mantenimiento general de temporales: no atadas a una reserva puntual. */
+  tareasGeneralesTemporales() {
+    return state.tareas.filter(t => t.origen === 'temporal' && !t.temporalId).sort((a, b) => (a.fecha||'').localeCompare(b.fecha||''));
+  },
+  tareasPendientes() {
+    return state.tareas.filter(t => t.estado === 'pendiente').sort((a, b) => (a.fecha||'').localeCompare(b.fecha||''));
+  },
+  tareasPendientesDe(origen) {
+    return sel.tareasPendientes().filter(t => t.origen === origen);
+  },
+  /** Tareas pendientes cuya fecha ya pasó — para mostrar como alerta. */
+  tareasVencidas() {
+    const hoy = new Date().toISOString().slice(0, 10);
+    return sel.tareasPendientes().filter(t => t.fecha && t.fecha < hoy);
+  },
+
+  /* ---- Temporales: check-ins / check-outs de hoy ---- */
+  checkInsHoy() {
+    const hoy = new Date().toISOString().slice(0, 10);
+    return state.temporales.filter(t => t.checkIn === hoy && t.estado !== 'cancelado');
+  },
+  checkOutsHoy() {
+    const hoy = new Date().toISOString().slice(0, 10);
+    return state.temporales.filter(t => t.checkOut === hoy && t.estado !== 'cancelado');
+  },
+
   /* ---- Matching propiedad ↔ clientes ---- */
   /**
    * Dado una propiedad, devuelve los clientes interesados con su % de coincidencia.
@@ -319,6 +357,8 @@ export const sel = {
       proxVencimientos:  sel.proxVencimientos().length,
       eventosHoy:        sel.eventosHoy().length,
       paraAjuste:        sel.contratosParaAjuste().length,
+      tareasPendientes:  sel.tareasPendientes().length,
+      tareasVencidas:    sel.tareasVencidas().length,
     };
   },
 
@@ -328,6 +368,7 @@ export const sel = {
     return {
       cobrosVencidos: k.cobrosVencidos || 0,
       eventosHoy:     k.eventosHoy || 0,
+      tareasVencidas: k.tareasVencidas || 0,
     };
   },
 };

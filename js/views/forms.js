@@ -8,7 +8,8 @@ import { $, esc, garantesDeAlquiler, fmtMontoInput, valorMonto } from '../lib.js
 import {
   TIPOS_CLIENTE, TIPOS_PROPIEDAD, TIPOS_OPERACION, MONEDAS,
   ORIGENES, TIPOS_AJUSTE, FRECUENCIAS_AJUSTE, PROP_ESTADOS,
-  VENTA_ESTADOS, TIPOS_EVENTO, icon, DIA_LIMITE_PAGO
+  VENTA_ESTADOS, TIPOS_EVENTO, icon, DIA_LIMITE_PAGO,
+  TIPOS_TAREA, ESTADOS_TAREA, FRECUENCIAS_TAREA
 } from '../config.js';
 
 const opts = (arr, sel) => arr.map(o => {
@@ -22,6 +23,10 @@ const clientesOpts = (sel) => getState().clientes
 
 const propietariosOpts = (sel) => (getState().propietarios || [])
   .map(p => `<option value="${p.id}" ${p.id === sel ? 'selected' : ''}>${esc(p.nombre)}</option>`).join('');
+
+const temporalesOpts = (sel) => (getState().temporales || [])
+  .filter(t => t.estado !== 'cancelado')
+  .map(t => `<option value="${t.id}" ${t.id === sel ? 'selected' : ''}>${esc(t.huesped || 'Huésped')} · ${t.checkIn||'?'} → ${t.checkOut||'?'}</option>`).join('');
 
 const propsOpts = (sel) => getState().propiedades
   .map(p => `<option value="${p.id}" ${p.id === sel ? 'selected' : ''}>${esc(p.direccion || p.id)}</option>`).join('');
@@ -1316,6 +1321,75 @@ export function openEventoForm(evento = null, onDone, fechaPre = null) {
         if (!data.propiedadId) delete data.propiedadId;
         if (ed) { await actions.updateEvento(evento.id, data); toast('Evento actualizado'); }
         else { await actions.createEvento(data); toast('Evento creado'); }
+        ctx.close(); onDone?.();
+      });
+    }
+  });
+}
+
+/* ============================================================
+   TAREA — problemas/incidencias y mantenimiento, usada tanto desde
+   un contrato de Alquileres como desde una reserva o el mantenimiento
+   general de Temporales. `presets` prellena el origen y los vínculos
+   (alquilerId/temporalId/propiedadId/clienteId) al crear una nueva.
+   ============================================================ */
+export function openTareaForm(tarea = null, onDone, presets = {}) {
+  const ed = !!tarea; tarea = tarea || {};
+  const hoy = new Date().toISOString().slice(0, 10);
+  const origenLocked = ed || !!presets.origen;
+  const origen      = tarea.origen      ?? presets.origen      ?? 'alquiler';
+  const alquilerId  = tarea.alquilerId  ?? presets.alquilerId  ?? '';
+  const temporalId  = tarea.temporalId  ?? presets.temporalId  ?? '';
+  const propiedadId = tarea.propiedadId ?? presets.propiedadId ?? '';
+  const clienteId   = tarea.clienteId   ?? presets.clienteId   ?? '';
+  const tipoDefault = tarea.tipo || (origen === 'temporal' && !temporalId ? 'mantenimiento_general' : 'problema');
+
+  openModal({
+    title: ed ? 'Editar tarea' : 'Nueva tarea',
+    bodyHTML: `
+      <form id="tareaForm" class="form-grid">
+        ${origenLocked
+          ? `<input type="hidden" name="origen" value="${esc(origen)}">`
+          : `<div class="form-group full"><label>Sección</label>
+               <select name="origen"><option value="alquiler">Alquileres</option><option value="temporal">Temporales</option></select></div>`}
+        ${alquilerId ? `<input type="hidden" name="alquilerId" value="${esc(alquilerId)}">` : ''}
+        ${(origen === 'temporal' || !origenLocked) ? `
+        <div class="form-group full"><label>Reserva relacionada (opcional, solo si es de Temporales)</label>
+          <select name="temporalId"><option value="">— Ninguna (mantenimiento general) —</option>${temporalesOpts(temporalId)}</select></div>` : ''}
+        <div class="form-group full"><label>Problema / tarea <span class="req">*</span></label>
+          <input name="titulo" required value="${esc(tarea.titulo||'')}" placeholder="Ej. Pérdida de agua en el baño"></div>
+        <div class="form-group"><label>Tipo</label>
+          <select name="tipo">${opts(TIPOS_TAREA, tipoDefault)}</select></div>
+        <div class="form-group"><label>Estado</label>
+          <select name="estado">${opts(ESTADOS_TAREA, tarea.estado||'pendiente')}</select></div>
+        <div class="form-group"><label>Día <span class="req">*</span></label>
+          <input name="fecha" type="date" required value="${tarea.fecha||hoy}"></div>
+        <div class="form-group"><label>Hora</label>
+          <input name="hora" type="time" value="${tarea.hora||''}"></div>
+        <div class="form-group full"><label>Asignado a (quién lo resuelve)</label>
+          <input name="asignadoA" value="${esc(tarea.asignadoA||'')}" placeholder="Ej. Juan (plomero)"></div>
+        <div class="form-group full"><label>Cliente relacionado</label>
+          <select name="clienteId"><option value="">— Ninguno —</option>${clientesOpts(clienteId)}</select></div>
+        <div class="form-group full"><label>Propiedad relacionada</label>
+          <select name="propiedadId"><option value="">— Ninguna —</option>${propsOpts(propiedadId)}</select></div>
+        <div class="form-group"><label>Se repite</label>
+          <select name="recurrenciaDias">${opts(FRECUENCIAS_TAREA, tarea.recurrenciaDias||'')}</select></div>
+        <div class="form-group full"><label>Notas</label>
+          <textarea name="notas" placeholder="Detalles de la tarea...">${esc(tarea.notas||'')}</textarea></div>
+      </form>`,
+    footerHTML: `<button class="btn btn-ghost" data-close>Cancelar</button><button class="btn btn-primary" id="saveTarea">${ed?'Guardar':'Crear tarea'}</button>`,
+    onMount(ctx) {
+      $('#saveTarea', ctx.overlay).addEventListener('click', async () => {
+        const f = $('#tareaForm', ctx.overlay);
+        if (!f.titulo.value.trim()) { f.titulo.focus(); toast('Describí el problema o la tarea', { tipo: 'warning' }); return; }
+        if (!f.fecha.value) { toast('La fecha es obligatoria', { tipo: 'warning' }); return; }
+        const data = Object.fromEntries(new FormData(f).entries());
+        if (!data.clienteId) delete data.clienteId;
+        if (!data.propiedadId) delete data.propiedadId;
+        if (!data.temporalId || data.origen !== 'temporal') delete data.temporalId;
+        if (!data.recurrenciaDias) delete data.recurrenciaDias;
+        if (ed) { await actions.updateTarea(tarea.id, data); toast('Tarea actualizada'); }
+        else { await actions.createTarea(data); toast('Tarea creada'); }
         ctx.close(); onDone?.();
       });
     }

@@ -13,8 +13,9 @@ import temporales     from './views/temporales.js';
 import liquidaciones  from './views/liquidaciones.js';
 import administracion from './views/administracion.js';
 import recibos         from './views/recibos.js';
+import tareas           from './views/tareas.js';
 
-const RUTAS = { inicio, clientes, propietarios, propiedades, alquileres, ventas, agenda, caja, temporales, liquidaciones, administracion, recibos };
+const RUTAS = { inicio, clientes, propietarios, propiedades, alquileres, ventas, agenda, caja, temporales, liquidaciones, administracion, recibos, tareas };
 
 let _cleanup = null;
 

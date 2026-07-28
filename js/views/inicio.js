@@ -36,6 +36,11 @@ function pintarInicio(el) {
   const eventosHoy  = sel.eventosHoy();
   const eventosPrx  = sel.eventosPendientes().slice(0, 6);
 
+  // Tareas pendientes (alquileres + temporales) y check-in/out de hoy
+  const tareasPend   = sel.tareasPendientes().slice(0, 6);
+  const checkInsHoy  = sel.checkInsHoy();
+  const checkOutsHoy = sel.checkOutsHoy();
+
   // Cobros vencidos (mes actual o anteriores, cobrados o nunca registrados)
   const cobrosImpagos = alquileres
     .filter(a => !['rescindido', 'renovado'].includes(a.estado))
@@ -226,6 +231,67 @@ function pintarInicio(el) {
         </div>
       </div>
 
+      <!-- Tareas pendientes (alquileres + temporales) -->
+      <div class="card">
+        <div class="card-head">
+          <h3 style="display:flex;align-items:center;gap:.5rem;font-size:.875rem;font-weight:600">
+            <span style="font-size:.8rem;line-height:1">🔧</span>
+            Tareas pendientes
+            ${k.tareasPendientes ? `<span class="badge ${k.tareasVencidas ? 'badge-danger' : 'badge-warning'}" style="font-size:.68rem">${k.tareasPendientes}</span>` : ''}
+          </h3>
+          <button class="btn btn-xs btn-ghost" id="btnVerTareas">Ver todas</button>
+        </div>
+        <div class="card-body" style="padding:0">
+          ${tareasPend.length ? tareasPend.map(t => {
+            const hoyStr = new Date().toISOString().slice(0, 10);
+            const vencida = t.fecha && t.fecha < hoyStr;
+            const ruta = t.origen === 'alquiler' && t.alquilerId ? `alquileres/${t.alquilerId}` : 'temporales';
+            return `
+              <div class="list-row list-row-hover" data-ruta-tarea="${ruta}" style="padding:.7rem 1rem">
+                <div class="list-info">
+                  <div class="list-name" style="font-size:.875rem">${esc(t.titulo)}</div>
+                  <div class="text-xs text-soft" style="margin-top:.1rem">${fmtFechaCorta(t.fecha)}${t.hora ? ' · ' + t.hora : ''}${t.asignadoA ? ' · ' + esc(t.asignadoA) : ''}</div>
+                </div>
+                <span style="font-size:.72rem;font-weight:600;padding:.2rem .55rem;border-radius:var(--r-full);
+                  background:${vencida ? 'var(--danger-soft)' : 'var(--warning-soft)'};
+                  color:${vencida ? 'var(--danger)' : 'var(--warning)'};white-space:nowrap">${vencida ? 'Vencida' : 'Pendiente'}</span>
+              </div>`;
+          }).join('') : `<div class="empty-sm">Sin tareas pendientes</div>`}
+        </div>
+      </div>
+
+      <!-- Check-ins / Check-outs de hoy (temporales) -->
+      <div class="card">
+        <div class="card-head">
+          <h3 style="display:flex;align-items:center;gap:.5rem;font-size:.875rem;font-weight:600">
+            <span style="font-size:.8rem;line-height:1">🏖</span>
+            Check-in / Check-out de hoy
+            ${(checkInsHoy.length + checkOutsHoy.length) ? `<span class="badge badge-info" style="font-size:.68rem">${checkInsHoy.length + checkOutsHoy.length}</span>` : ''}
+          </h3>
+          <button class="btn btn-xs btn-ghost" id="btnVerTemporales">Ver temporales</button>
+        </div>
+        <div class="card-body" style="padding:0">
+          ${(checkInsHoy.length + checkOutsHoy.length) ? `
+          ${checkInsHoy.map(t => `
+            <div class="list-row list-row-hover" data-temp="${t.id}" style="padding:.7rem 1rem">
+              <div class="list-info">
+                <div class="list-name" style="font-size:.875rem">${esc(t.huesped || 'Huésped')}</div>
+                <div class="text-xs text-soft" style="margin-top:.1rem">${esc(sel.dirPropiedad(t.propiedadId))}</div>
+              </div>
+              <span style="font-size:.72rem;font-weight:600;padding:.2rem .55rem;border-radius:var(--r-full);background:var(--success-soft);color:var(--success);white-space:nowrap">Check-in</span>
+            </div>`).join('')}
+          ${checkOutsHoy.map(t => `
+            <div class="list-row list-row-hover" data-temp="${t.id}" style="padding:.7rem 1rem">
+              <div class="list-info">
+                <div class="list-name" style="font-size:.875rem">${esc(t.huesped || 'Huésped')}</div>
+                <div class="text-xs text-soft" style="margin-top:.1rem">${esc(sel.dirPropiedad(t.propiedadId))}</div>
+              </div>
+              <span style="font-size:.72rem;font-weight:600;padding:.2rem .55rem;border-radius:var(--r-full);background:var(--info-soft);color:var(--info);white-space:nowrap">Check-out</span>
+            </div>`).join('')}
+          ` : `<div class="empty-sm">Sin movimientos hoy</div>`}
+        </div>
+      </div>
+
     </div>`;
 
   el.querySelector('#btnActualizarIndices')?.addEventListener('click', async (e) => {
@@ -240,7 +306,11 @@ function pintarInicio(el) {
   el.querySelector('#btnVerCobros')?.addEventListener('click',  () => navegar('alquileres'));
   el.querySelector('#btnVerProxCobros')?.addEventListener('click', () => navegar('alquileres'));
   el.querySelector('#btnVerAgenda')?.addEventListener('click',  () => navegar('agenda'));
+  el.querySelector('#btnVerTemporales')?.addEventListener('click', () => navegar('temporales'));
+  el.querySelector('#btnVerTareas')?.addEventListener('click', () => navegar('tareas'));
   el.querySelectorAll('[data-alq]').forEach(r => r.addEventListener('click', () => navegar(`alquileres/${r.dataset.alq}`)));
+  el.querySelectorAll('[data-ruta-tarea]').forEach(r => r.addEventListener('click', () => navegar(r.dataset.rutaTarea)));
+  el.querySelectorAll('[data-temp]').forEach(r => r.addEventListener('click', () => navegar(`temporales/${r.dataset.temp}`)));
 }
 
 function kpi(ico, label, val, ruta, accent = 'var(--brand-100)', accentColor = 'var(--brand-600)') {

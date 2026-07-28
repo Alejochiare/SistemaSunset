@@ -70,6 +70,31 @@ export const TIPOS_EVENTO = [
   { id: 'otro',        label: 'Otro' },
 ];
 
+/* Tipos de tarea (problemas/incidencias y mantenimiento, en alquileres y temporales) */
+export const TIPOS_TAREA = [
+  { id: 'problema',              label: 'Problema / incidencia' },
+  { id: 'mantenimiento_general', label: 'Mantenimiento general' },
+  { id: 'otro',                  label: 'Otro' },
+];
+
+/* Estado de una tarea */
+export const ESTADOS_TAREA = [
+  { id: 'pendiente', label: 'Pendiente', badge: 'badge-warning' },
+  { id: 'listo',     label: 'Listo',     badge: 'badge-info' },
+  { id: 'cerrado',   label: 'Cerrado',   badge: 'badge-success' },
+];
+
+/* Frecuencia de repetición de una tarea (para mantenimiento periódico) */
+export const FRECUENCIAS_TAREA = [
+  { id: '',    label: 'No se repite' },
+  { id: '7',   label: 'Cada 1 semana' },
+  { id: '14',  label: 'Cada 2 semanas' },
+  { id: '30',  label: 'Cada 1 mes' },
+  { id: '90',  label: 'Cada 3 meses' },
+  { id: '180', label: 'Cada 6 meses' },
+  { id: '365', label: 'Cada 1 año' },
+];
+
 /* Días de alerta antes de vencimiento de contrato */
 export const ALERTA_VENCIMIENTO_DIAS = 60;
 
@@ -85,7 +110,7 @@ export const NAV = [
   { id: 'propiedades',   label: 'Propiedades',             icon: 'home' },
   { section: 'Operaciones' },
   { id: 'alquileres',   label: 'Alquileres',       icon: 'key',    badgeKey: 'cobrosVencidos', danger: true },
-  { id: 'temporales',   label: 'Temporales',       icon: 'sun' },
+  { id: 'temporales',   label: 'Temporales',       icon: 'sun', badgeKey: 'tareasVencidas', danger: true },
   { id: 'ventas',       label: 'Ventas',           icon: 'dollar' },
   { section: 'Finanzas' },
   { id: 'liquidaciones', label: 'Liquidaciones',    icon: 'file' },
@@ -93,6 +118,7 @@ export const NAV = [
   { id: 'recibos',       label: 'Generador de recibo', icon: 'file' },
   { section: 'Agenda' },
   { id: 'agenda',       label: 'Agenda',           icon: 'calendar', badgeKey: 'eventosHoy' },
+  { id: 'tareas',       label: 'Tareas pendientes', icon: 'alert', badgeKey: 'tareasPendientes' },
   { section: 'Sitio web' },
   { id: 'administracion', label: 'Administración', icon: 'shield' },
 ];

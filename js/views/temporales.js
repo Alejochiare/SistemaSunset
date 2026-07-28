@@ -1,12 +1,13 @@
 /* ============================================================
    VISTA · Alquileres Temporales
    ============================================================ */
-import { getState, actions, subscribe } from '../store.js';
-import { icon } from '../config.js';
+import { getState, sel, actions, subscribe } from '../store.js';
+import { icon, ESTADOS_TAREA } from '../config.js';
 import { esc, fmtFechaCorta, fmtMontoInput, valorMonto, parseFechaLocal } from '../lib.js';
 import { openModal } from '../components/modal.js';
 import { toast } from '../components/toast.js';
 import { imprimirReciboTemporal, imprimirResumenOcupacion, generarPDFInformeOcupacion } from '../imprimir.js';
+import { openTareaForm } from './forms.js';
 
 const ESTADOS = [
   { id: 'confirmado', label: 'Confirmado', color: 'var(--primary)' },
@@ -79,10 +80,10 @@ function salidaMismoDia(propiedadId, checkIn, excludeId) {
   );
 }
 
-export default function temporales(root) {
+export default function temporales(root, param) {
   root.innerHTML = `<div class="view" id="vTemp"></div>`;
 
-  let vista  = 'agenda'; // 'agenda' | 'lista' | 'informe'
+  let vista  = 'agenda'; // 'agenda' | 'lista' | 'mantenimiento' | 'informe'
   let filtro = 'activos'; // 'activos' | 'todos' | 'completados' (solo para vista lista)
   const hoyD = new Date();
   let anioAgenda = hoyD.getFullYear();
@@ -94,6 +95,13 @@ export default function temporales(root) {
   render();
   const unsub = subscribe(render);
 
+  // Si venimos de un link directo (ej. check-in/check-out de hoy en Inicio), abrimos
+  // esa reserva puntual en la lista.
+  if (param) {
+    const t = getState().temporales.find(x => x.id === param);
+    if (t) { vista = 'lista'; render(); abrirDetalleTemporal(t, render); }
+  }
+
   root.querySelector('#vTemp').addEventListener('change', e => {
     if (e.target.id === 'histPropietario') { histPropietarioId = e.target.value; render(); return; }
     if (e.target.id === 'histMes') { histMes = e.target.value; render(); return; }
@@ -104,6 +112,22 @@ export default function temporales(root) {
 
     const vt = e.target.closest('[data-vista-temp]');
     if (vt) { vista = vt.dataset.vistaTemp; render(); return; }
+
+    if (e.target.closest('#btnNuevaTareaTemp')) {
+      openTareaForm(null, () => {}, { origen: 'temporal' });
+      return;
+    }
+    const editarTarea = e.target.closest('[data-editar-tarea]');
+    if (editarTarea) {
+      const t = getState().tareas.find(x => x.id === editarTarea.dataset.editarTarea);
+      if (t) openTareaForm(t, () => {});
+      return;
+    }
+    const eliminarTarea = e.target.closest('[data-eliminar-tarea]');
+    if (eliminarTarea) {
+      if (confirm('¿Eliminar esta tarea?')) actions.deleteTarea(eliminarTarea.dataset.eliminarTarea);
+      return;
+    }
 
     const pf = e.target.closest('[data-filtro-temp]');
     if (pf) { filtro = pf.dataset.filtroTemp; render(); return; }
@@ -188,9 +212,10 @@ function pintarTemporales(el, { vista, filtro, anioAgenda, mesAgenda, histPropie
     <!-- Selector de vista -->
     <div style="display:flex;gap:.5rem;margin-bottom:1.25rem;flex-wrap:wrap">
       ${[
-        { id:'agenda',  label:'📅 Agenda' },
-        { id:'lista',   label:'☰ Lista' },
-        { id:'informe', label:'📋 Informe mensual' },
+        { id:'agenda',        label:'📅 Agenda' },
+        { id:'lista',         label:'☰ Lista' },
+        { id:'mantenimiento', label:'🔧 Mantenimiento' },
+        { id:'informe',       label:'📋 Informe mensual' },
       ].map(v => {
         const act = vista === v.id;
         return `<button data-vista-temp="${v.id}" style="
@@ -207,7 +232,79 @@ function pintarTemporales(el, { vista, filtro, anioAgenda, mesAgenda, histPropie
   const body = el.querySelector('#vTempBody');
   if (vista === 'agenda') pintarAgenda(body, anioAgenda, mesAgenda);
   else if (vista === 'informe') pintarInformeTemporal(body, histPropietarioId, histMes);
+  else if (vista === 'mantenimiento') pintarMantenimiento(body);
   else pintarLista(body, filtro);
+}
+
+/* ── Vista Mantenimiento: mantenimiento general de las propiedades + tareas
+   puntuales ligadas a una reserva (problemas/incidencias del huésped) ── */
+function pintarMantenimiento(el) {
+  const { tareas } = getState();
+  const generales  = sel.tareasGeneralesTemporales();
+  const porReserva = tareas.filter(t => t.origen === 'temporal' && t.temporalId)
+    .sort((a, b) => (b.fecha||'').localeCompare(a.fecha||''));
+  const vencidas = sel.tareasVencidas().filter(t => t.origen === 'temporal');
+
+  el.innerHTML = `
+    <div style="display:flex;justify-content:flex-end;margin-bottom:1rem">
+      <button class="btn btn-primary" id="btnNuevaTareaTemp">${icon('plus')} Nueva tarea</button>
+    </div>
+
+    ${vencidas.length ? `
+    <div style="
+      margin-bottom:1.25rem;padding:1rem 1.25rem;border-radius:var(--r-md);
+      background:color-mix(in srgb,var(--danger) 12%,transparent);
+      border:2px solid var(--danger);display:flex;align-items:center;gap:1rem;flex-wrap:wrap
+    ">
+      <div style="font-size:1.5rem">⚠️</div>
+      <div style="flex:1;min-width:200px">
+        <div style="font-weight:700;font-size:.95rem">${vencidas.length} tarea${vencidas.length!==1?'s':''} sin resolver, con la fecha ya pasada</div>
+        <div style="font-size:.82rem;color:var(--text-soft);margin-top:.2rem">Revisá la lista de abajo y actualizá su estado.</div>
+      </div>
+    </div>` : ''}
+
+    <div class="two-col-grid">
+      <div class="card">
+        <div class="card-head">
+          <h3>${icon('sun')} Mantenimiento general</h3>
+        </div>
+        <div class="card-body" style="padding:0">
+          ${generales.length ? generales.map(t => renderTareaTemp(t)).join('') : `<div class="empty-sm">Sin tareas de mantenimiento general. Cargá limpiezas, service de aire, etc.</div>`}
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h3>${icon('alert')} Tareas por reserva</h3>
+        </div>
+        <div class="card-body" style="padding:0">
+          ${porReserva.length ? porReserva.map(t => renderTareaTemp(t)).join('') : `<div class="empty-sm">Sin problemas/incidencias registrados</div>`}
+        </div>
+      </div>
+    </div>`;
+}
+
+function renderTareaTemp(t) {
+  const { temporales } = getState();
+  const estadoObj = ESTADOS_TAREA.find(e => e.id === t.estado);
+  const reserva = t.temporalId ? temporales.find(x => x.id === t.temporalId) : null;
+  return `
+    <div class="list-row" style="align-items:flex-start;gap:.75rem">
+      <div style="flex:1;min-width:0">
+        <div class="list-name" style="font-size:.875rem">${esc(t.titulo)}</div>
+        <div class="text-xs text-soft" style="margin-top:.15rem">
+          ${fmtFechaCorta(t.fecha)}${t.hora ? ' · ' + esc(t.hora) : ''}
+          ${t.asignadoA ? ' · 👤 ' + esc(t.asignadoA) : ''}
+          ${reserva ? ' · ' + esc(reserva.huesped || 'Huésped') : ''}
+          ${t.recurrenciaDias ? ' · 🔁' : ''}
+        </div>
+      </div>
+      <span class="badge ${estadoObj?.badge || 'badge-neutral'}" style="flex-shrink:0">${estadoObj?.label || t.estado}</span>
+      <div style="display:flex;gap:.15rem;flex-shrink:0">
+        <button class="btn btn-xs btn-ghost" data-editar-tarea="${t.id}" title="Editar">${icon('edit')}</button>
+        <button class="btn btn-xs btn-ghost" data-eliminar-tarea="${t.id}" title="Eliminar" style="color:var(--danger)">${icon('trash')}</button>
+      </div>
+    </div>`;
 }
 
 /* ── Vista Agenda: grilla de días × propiedades, como un libro de reservas ── */

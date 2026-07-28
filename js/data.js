@@ -14,7 +14,7 @@ function trySet(key, value) {
 }
 
 function estadoInicial() {
-  return { clientes: [], propietarios: [], propiedades: [], alquileres: [], ventas: [], agenda: [], caja: [], temporales: [], liquidaciones: [], liquidacionesTemporales: [] };
+  return { clientes: [], propietarios: [], propiedades: [], alquileres: [], ventas: [], agenda: [], caja: [], temporales: [], liquidaciones: [], liquidacionesTemporales: [], tareas: [] };
 }
 
 function load() {
@@ -641,6 +641,46 @@ export const api = {
   },
   async deleteEvento(id) {
     _db.agenda = _db.agenda.filter(x => x.id !== id);
+    persist(_db);
+    return delay(true);
+  },
+
+  /* ---- TAREAS (problemas/incidencias y mantenimiento, en alquileres y temporales) ---- */
+  async createTarea(data) {
+    if (!_db.tareas) _db.tareas = [];
+    const t = {
+      id: uid('tar'),
+      fechaAlta: new Date().toISOString(),
+      estado: 'pendiente',
+      ...data,
+    };
+    _db.tareas.unshift(t);
+    persist(_db);
+    return delay(structuredClone(t));
+  },
+  async updateTarea(id, patch) {
+    if (!_db.tareas) _db.tareas = [];
+    const t = _db.tareas.find(x => x.id === id);
+    if (!t) return delay(null);
+    const estabaResuelta = ['listo', 'cerrado'].includes(t.estado);
+    Object.assign(t, patch);
+    // Si una tarea recurrente pasa a resuelta, se registra el cierre y se genera
+    // automáticamente la próxima ocurrencia como pendiente (queda historial de ambas).
+    if (!estabaResuelta && ['listo', 'cerrado'].includes(t.estado)) {
+      t.fechaCierre = hoyISO();
+      if (t.recurrenciaDias) {
+        const base = new Date((t.fecha || t.fechaCierre) + 'T00:00:00');
+        base.setDate(base.getDate() + Number(t.recurrenciaDias));
+        const { id: _id, fechaCierre: _fc, ...resto } = t;
+        const nueva = { ...resto, id: uid('tar'), fechaAlta: new Date().toISOString(), estado: 'pendiente', fecha: base.toISOString().slice(0, 10) };
+        _db.tareas.unshift(nueva);
+      }
+    }
+    persist(_db);
+    return delay(structuredClone(t));
+  },
+  async deleteTarea(id) {
+    _db.tareas = (_db.tareas || []).filter(x => x.id !== id);
     persist(_db);
     return delay(true);
   },

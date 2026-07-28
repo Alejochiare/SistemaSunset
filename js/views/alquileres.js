@@ -2,10 +2,10 @@
    VISTA · Alquileres — contratos activos, cobros y vencimientos
    ============================================================ */
 import { getState, sel, actions, subscribe } from '../store.js';
-import { icon, CONTRATO_ESTADOS, MONEDAS, DIA_LIMITE_PAGO } from '../config.js';
+import { icon, CONTRATO_ESTADOS, ESTADOS_TAREA, MONEDAS, DIA_LIMITE_PAGO } from '../config.js';
 import { esc, fmtMoneda, fmtFechaCorta, garantesDeAlquiler, valorMonto, fmtMontoInput, parseFechaLocal, debounce } from '../lib.js';
 import { navegar } from '../router.js';
-import { openAlquilerForm, openCobroForm, openRenovacionForm } from './forms.js';
+import { openAlquilerForm, openCobroForm, openRenovacionForm, openTareaForm } from './forms.js';
 import { openModal } from '../components/modal.js';
 import { toast } from '../components/toast.js';
 import { imprimirRecibo, imprimirLiquidacion, imprimirFacturaDeuda, getAgencia, setAgencia } from '../imprimir.js';
@@ -208,6 +208,10 @@ function pintarDetalle(el, id) {
   const totalCobrado = (a.cobros || []).filter(c => c.pagado).reduce((s, c) => s + (Number(c.monto)||0), 0);
   const nPagados     = (a.cobros || []).filter(c => c.pagado).length;
   const nDebe        = meses.filter(m => m.tipo === 'sin_cobro').length;
+
+  // ── Tareas / mantenimiento del contrato ──────────────────
+  const tareas = sel.tareasDeAlquiler(a.id);
+  const tareasPend = tareas.filter(t => t.estado === 'pendiente');
 
   // ── Render ────────────────────────────────────────────────
   el.innerHTML = `
@@ -422,6 +426,19 @@ function pintarDetalle(el, id) {
       </div>
     </div>` : ''}
 
+    <!-- Tareas / Mantenimiento -->
+    <div class="card" style="margin-bottom:1.25rem">
+      <div class="card-head">
+        <h3 style="display:flex;align-items:center;gap:.5rem">${icon('alert')} Tareas / Mantenimiento
+          ${tareasPend.length ? `<span class="badge badge-warning" style="font-size:.68rem">${tareasPend.length}</span>` : ''}
+        </h3>
+        <button class="btn btn-sm btn-primary" id="btnNuevaTarea">${icon('plus')} Nueva tarea</button>
+      </div>
+      <div class="card-body" style="padding:0">
+        ${tareas.length ? tareas.map(t => renderTarea(t)).join('') : `<div class="empty-sm">Sin tareas registradas para este contrato</div>`}
+      </div>
+    </div>
+
     <div style="padding-top:.75rem;border-top:1px solid var(--border);display:flex;gap:1rem;flex-wrap:wrap">
       ${a.estado === 'activo' ? `
       <button class="btn btn-ghost" id="btnRenovarAlq">${icon('refresh')} Renovar contrato</button>
@@ -519,6 +536,46 @@ function pintarDetalle(el, id) {
     await actions.deleteAlquiler(id);
     navegar('alquileres');
   });
+
+  /* Tareas / mantenimiento */
+  el.querySelector('#btnNuevaTarea')?.addEventListener('click', () => {
+    openTareaForm(null, () => {}, { origen: 'alquiler', alquilerId: a.id, propiedadId: a.propiedadId, clienteId: a.inquilinoId });
+  });
+  el.querySelectorAll('[data-editar-tarea]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const t = getState().tareas.find(x => x.id === btn.dataset.editarTarea);
+      if (t) openTareaForm(t, () => {});
+    });
+  });
+  el.querySelectorAll('[data-eliminar-tarea]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (confirm('¿Eliminar esta tarea?')) actions.deleteTarea(btn.dataset.eliminarTarea);
+    });
+  });
+}
+
+/* Fila de una tarea (usada en Alquileres y Temporales) */
+function renderTarea(t) {
+  const estadoObj = ESTADOS_TAREA.find(e => e.id === t.estado);
+  return `
+    <div class="list-row" style="align-items:flex-start;gap:.75rem">
+      <div style="flex:1;min-width:0">
+        <div class="list-name" style="font-size:.875rem">${esc(t.titulo)}</div>
+        <div class="text-xs text-soft" style="margin-top:.15rem">
+          ${fmtFechaCorta(t.fecha)}${t.hora ? ' · ' + esc(t.hora) : ''}
+          ${t.asignadoA ? ' · 👤 ' + esc(t.asignadoA) : ''}
+          ${t.tipo === 'mantenimiento_general' ? ' · Mantenimiento general' : ''}
+          ${t.recurrenciaDias ? ' · 🔁' : ''}
+        </div>
+      </div>
+      <span class="badge ${estadoObj?.badge || 'badge-neutral'}" style="flex-shrink:0">${estadoObj?.label || t.estado}</span>
+      <div style="display:flex;gap:.15rem;flex-shrink:0">
+        <button class="btn btn-xs btn-ghost" data-editar-tarea="${t.id}" title="Editar">${icon('edit')}</button>
+        <button class="btn btn-xs btn-ghost" data-eliminar-tarea="${t.id}" title="Eliminar" style="color:var(--danger)">${icon('trash')}</button>
+      </div>
+    </div>`;
 }
 
 const METODOS_CANCELACION = [
