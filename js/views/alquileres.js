@@ -15,22 +15,129 @@ import { getUltimoIndice, calcularVariacionICL, calcularVariacionIPC } from '../
 export default function alquileres(root, param) {
   if (param) return alqDetalle(root, param);
   root.innerHTML = `<div class="view" id="vAlq"></div>`;
+  let vista = 'contratos'; // 'contratos' | 'mantenimiento'
   let filtro = '';
   let busqueda = '';
 
-  const render = () => pintarLista(root.querySelector('#vAlq'), filtro, busqueda);
+  const render = () => pintarAlquileresVista(root.querySelector('#vAlq'), { vista, filtro, busqueda });
   render();
   const unsub = subscribe(render);
 
   root.querySelector('#vAlq').addEventListener('click', (e) => {
+    if (e.target.closest('#btnNuevoAlq')) { openAlquilerForm(null, () => {}); return; }
+    if (e.target.closest('#btnNuevaTareaAlq')) { openTareaForm(null, () => {}, { origen: 'alquiler' }); return; }
+
+    const vt = e.target.closest('[data-vista-alq]');
+    if (vt) { vista = vt.dataset.vistaAlq; render(); return; }
+
     const btn = e.target.closest('[data-filtro]');
-    if (btn) { filtro = btn.dataset.filtro; render(); }
+    if (btn) { filtro = btn.dataset.filtro; render(); return; }
+
+    const editarTarea = e.target.closest('[data-editar-tarea]');
+    if (editarTarea) {
+      const t = getState().tareas.find(x => x.id === editarTarea.dataset.editarTarea);
+      if (t) openTareaForm(t, () => {});
+      return;
+    }
+    const eliminarTarea = e.target.closest('[data-eliminar-tarea]');
+    if (eliminarTarea) {
+      if (confirm('¿Eliminar esta tarea?')) actions.deleteTarea(eliminarTarea.dataset.eliminarTarea);
+      return;
+    }
+    const irTarea = e.target.closest('[data-ir-tarea]');
+    if (irTarea && irTarea.dataset.irTarea) { navegar(`alquileres/${irTarea.dataset.irTarea}`); return; }
   });
   root.querySelector('#vAlq').addEventListener('input', debounce((e) => {
     if (e.target.id === 'buscarAlq') { busqueda = e.target.value.toLowerCase(); render(); }
   }, 150));
 
   return unsub;
+}
+
+/* ── Encabezado + pestañas (Contratos / Mantenimiento) ── */
+function pintarAlquileresVista(el, { vista, filtro, busqueda }) {
+  const tareasPend = sel.tareasPendientesDe('alquiler');
+
+  el.innerHTML = `
+    <div class="view-head">
+      <div>
+        <h1 class="view-title">Alquileres</h1>
+      </div>
+      ${vista === 'mantenimiento'
+        ? `<button class="btn btn-primary" id="btnNuevaTareaAlq">${icon('plus')} Nueva tarea</button>`
+        : `<button class="btn btn-primary" id="btnNuevoAlq">${icon('plus')} Nuevo contrato</button>`}
+    </div>
+
+    <div class="tabs" style="margin-bottom:1rem">
+      <button class="tab ${vista==='contratos'?'active':''}" data-vista-alq="contratos">Contratos</button>
+      <button class="tab ${vista==='mantenimiento'?'active':''}" data-vista-alq="mantenimiento">🔧 Mantenimiento${tareasPend.length ? ` (${tareasPend.length})` : ''}</button>
+    </div>
+
+    <div id="vAlqBody"></div>`;
+
+  const body = el.querySelector('#vAlqBody');
+  if (vista === 'mantenimiento') pintarMantenimientoAlq(body);
+  else pintarLista(body, filtro, busqueda);
+}
+
+/* ── Mantenimiento: todas las tareas/problemas de los contratos de alquiler ── */
+function pintarMantenimientoAlq(el) {
+  const { tareas, alquileres, clientes, propiedades } = getState();
+  const deAlquiler = tareas.filter(t => t.origen === 'alquiler').sort((a, b) => (a.fecha||'').localeCompare(b.fecha||''));
+  const vencidas = sel.tareasVencidas().filter(t => t.origen === 'alquiler');
+
+  el.innerHTML = `
+    ${vencidas.length ? `
+    <div style="
+      margin-bottom:1.25rem;padding:1rem 1.25rem;border-radius:var(--r-md);
+      background:color-mix(in srgb,var(--danger) 12%,transparent);
+      border:2px solid var(--danger);display:flex;align-items:center;gap:1rem;flex-wrap:wrap
+    ">
+      <div style="font-size:1.5rem">⚠️</div>
+      <div style="flex:1;min-width:200px">
+        <div style="font-weight:700;font-size:.95rem">${vencidas.length} tarea${vencidas.length!==1?'s':''} sin resolver, con la fecha ya pasada</div>
+        <div style="font-size:.82rem;color:var(--text-soft);margin-top:.2rem">Revisá la lista de abajo y actualizá su estado.</div>
+      </div>
+    </div>` : ''}
+
+    ${deAlquiler.length ? `
+    <div class="card" style="padding:0">
+      ${deAlquiler.map(t => renderTareaConContrato(t, { alquileres, clientes, propiedades })).join('')}
+    </div>` : `
+    <div class="empty">
+      ${icon('alert')}
+      <h3>Sin tareas registradas</h3>
+      <p>Se cargan desde acá o desde el detalle de cada contrato.</p>
+    </div>`}`;
+}
+
+function renderTareaConContrato(t, { alquileres, clientes, propiedades }) {
+  const estadoObj = ESTADOS_TAREA.find(e => e.id === t.estado);
+  const hoy = new Date().toISOString().slice(0, 10);
+  const vencida = t.estado === 'pendiente' && t.fecha && t.fecha < hoy;
+  const alq  = t.alquilerId ? alquileres.find(a => a.id === t.alquilerId) : null;
+  const inq  = alq ? clientes.find(c => c.id === alq.inquilinoId) : (t.clienteId ? clientes.find(c => c.id === t.clienteId) : null);
+  const prop = t.propiedadId ? propiedades.find(p => p.id === t.propiedadId) : null;
+
+  const partes = [
+    fmtFechaCorta(t.fecha) + (t.hora ? ' · ' + t.hora : ''),
+    inq?.nombre,
+    prop?.direccion,
+    t.asignadoA ? '👤 ' + t.asignadoA : null,
+  ].filter(Boolean).join(' · ');
+
+  return `
+    <div class="list-row ${t.alquilerId ? 'list-row-hover' : ''}" data-ir-tarea="${t.alquilerId || ''}" style="cursor:${t.alquilerId ? 'pointer' : 'default'}">
+      <div class="list-info" style="flex:1;min-width:0">
+        <div class="list-name">${esc(t.titulo)}${vencida ? ' <span class="badge badge-danger" style="font-size:.65rem">Vencida</span>' : ''}</div>
+        <div class="text-xs text-soft truncate">${esc(partes)}</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:.5rem;flex-shrink:0">
+        <span class="badge ${estadoObj?.badge || 'badge-neutral'}">${estadoObj?.label || t.estado}</span>
+        <button class="btn btn-xs btn-ghost" data-editar-tarea="${t.id}" title="Editar" onclick="event.stopPropagation()">${icon('edit')}</button>
+        <button class="btn btn-xs btn-ghost" data-eliminar-tarea="${t.id}" title="Eliminar" onclick="event.stopPropagation()" style="color:var(--danger)">${icon('trash')}</button>
+      </div>
+    </div>`;
 }
 
 function pintarLista(el, filtro, busqueda) {
@@ -85,13 +192,7 @@ function pintarLista(el, filtro, busqueda) {
   };
 
   el.innerHTML = `
-    <div class="view-head">
-      <div>
-        <h1 class="view-title">Alquileres</h1>
-        <p class="view-sub">${activos.length} activo${activos.length !== 1 ? 's' : ''}</p>
-      </div>
-      <button class="btn btn-primary" id="btnNuevoAlq">${icon('plus')} Nuevo contrato</button>
-    </div>
+    <p class="view-sub" style="margin-bottom:1rem">${activos.length} activo${activos.length !== 1 ? 's' : ''}</p>
 
     <div class="toolbar">
       <div class="search-bar">
@@ -158,7 +259,6 @@ function pintarLista(el, filtro, busqueda) {
       <button class="btn btn-primary" id="btnNuevoAlq2">${icon('plus')} Nuevo contrato</button>
     </div>`}`;
 
-  el.querySelector('#btnNuevoAlq')?.addEventListener('click', () => openAlquilerForm(null, () => {}));
   el.querySelector('#btnNuevoAlq2')?.addEventListener('click', () => openAlquilerForm(null, () => {}));
 
   el.querySelectorAll('.list-row-hover[data-id]').forEach(row => {
@@ -559,10 +659,12 @@ function pintarDetalle(el, id) {
 /* Fila de una tarea (usada en Alquileres y Temporales) */
 function renderTarea(t) {
   const estadoObj = ESTADOS_TAREA.find(e => e.id === t.estado);
+  const hoy = new Date().toISOString().slice(0, 10);
+  const vencida = t.estado === 'pendiente' && t.fecha && t.fecha < hoy;
   return `
     <div class="list-row" style="align-items:flex-start;gap:.75rem">
       <div style="flex:1;min-width:0">
-        <div class="list-name" style="font-size:.875rem">${esc(t.titulo)}</div>
+        <div class="list-name" style="font-size:.875rem">${esc(t.titulo)}${vencida ? ' <span class="badge badge-danger" style="font-size:.65rem">Vencida</span>' : ''}</div>
         <div class="text-xs text-soft" style="margin-top:.15rem">
           ${fmtFechaCorta(t.fecha)}${t.hora ? ' · ' + esc(t.hora) : ''}
           ${t.asignadoA ? ' · 👤 ' + esc(t.asignadoA) : ''}

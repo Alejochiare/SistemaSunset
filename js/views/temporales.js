@@ -288,10 +288,12 @@ function renderTareaTemp(t) {
   const { temporales } = getState();
   const estadoObj = ESTADOS_TAREA.find(e => e.id === t.estado);
   const reserva = t.temporalId ? temporales.find(x => x.id === t.temporalId) : null;
+  const hoy = new Date().toISOString().slice(0, 10);
+  const vencida = t.estado === 'pendiente' && t.fecha && t.fecha < hoy;
   return `
     <div class="list-row" style="align-items:flex-start;gap:.75rem">
       <div style="flex:1;min-width:0">
-        <div class="list-name" style="font-size:.875rem">${esc(t.titulo)}</div>
+        <div class="list-name" style="font-size:.875rem">${esc(t.titulo)}${vencida ? ' <span class="badge badge-danger" style="font-size:.65rem">Vencida</span>' : ''}</div>
         <div class="text-xs text-soft" style="margin-top:.15rem">
           ${fmtFechaCorta(t.fecha)}${t.hora ? ' · ' + esc(t.hora) : ''}
           ${t.asignadoA ? ' · 👤 ' + esc(t.asignadoA) : ''}
