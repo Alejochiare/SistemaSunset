@@ -79,10 +79,15 @@ export const TIPOS_TAREA = [
 
 /* Estado de una tarea */
 export const ESTADOS_TAREA = [
-  { id: 'pendiente', label: 'Pendiente', badge: 'badge-warning' },
-  { id: 'listo',     label: 'Listo',     badge: 'badge-info' },
-  { id: 'cerrado',   label: 'Cerrado',   badge: 'badge-success' },
+  { id: 'pendiente',  label: 'Pendiente',  badge: 'badge-warning' },
+  { id: 'en_proceso', label: 'En proceso', badge: 'badge-info' },
+  { id: 'listo',      label: 'Listo',      badge: 'badge-success' },
+  { id: 'cerrado',    label: 'Cerrado',    badge: 'badge-neutral' },
 ];
+
+/* Pasos del "pasador" de estado que se usa en Alquileres/Temporales → Mantenimiento
+   (el estado "cerrado" queda fuera: es un cierre manual, no un paso del flujo normal). */
+export const PASOS_TAREA = ESTADOS_TAREA.filter(e => e.id !== 'cerrado');
 
 /* Frecuencia de repetición de una tarea (para mantenimiento periódico) */
 export const FRECUENCIAS_TAREA = [
@@ -93,6 +98,65 @@ export const FRECUENCIAS_TAREA = [
   { id: '90',  label: 'Cada 3 meses' },
   { id: '180', label: 'Cada 6 meses' },
   { id: '365', label: 'Cada 1 año' },
+];
+
+/* ============================================================
+   VENTAS · Comercialización de propiedades marcadas para vender
+   (la propiedad en sí se carga desde "Propiedades"; esto es
+   vocabulario auxiliar para el circuito de venta)
+   ============================================================ */
+export const EXCLUSIVIDAD_VENTA = [
+  { id: 'exclusiva',  label: 'Exclusiva' },
+  { id: 'compartida', label: 'Compartida con otra inmobiliaria' },
+];
+
+export const PLAZOS_COMERCIALIZACION = [
+  { id: '90',  label: '90 días' },
+  { id: '180', label: '180 días' },
+  { id: '365', label: '1 año' },
+  { id: 'personalizado', label: 'Personalizado' },
+];
+
+export const TIPOS_DOCUMENTO_VENTA = [
+  'Escritura', 'Plano', 'Matrícula', 'Copia de escritura', 'DNI propietario',
+  'Informe de Catastro', 'Cédula de Rentas', 'Número de cuenta municipal',
+  'Impuesto provincial', 'Impuesto municipal', 'Informe de inhibición', 'Otros',
+];
+
+export const ESTADOS_DOCUMENTO = [
+  { id: 'completo',  label: 'Completo',  simbolo: '✅', badge: 'badge-success' },
+  { id: 'pendiente', label: 'Pendiente', simbolo: '⚠️', badge: 'badge-warning' },
+  { id: 'faltante',  label: 'Faltante',  simbolo: '❌', badge: 'badge-danger' },
+];
+
+export const CANALES_COMERCIALIZACION = [
+  'Publicado en sitio web', 'Facebook', 'Instagram', 'Marketplace', 'Cartel colocado',
+  'Fotos profesionales', 'Videos', 'Drone', 'Reel', 'Publicidad Meta Ads',
+];
+
+export const ORIGENES_INTERESADO = ['Facebook', 'Instagram', 'Página web', 'Marketplace', 'Referido', 'Cartel', 'Otro'];
+
+export const TIPOS_CONTACTO_INTERESADO = [
+  { id: 'consulta',     label: 'Consulta' },
+  { id: 'llamada',      label: 'Llamada telefónica' },
+  { id: 'whatsapp',     label: 'WhatsApp' },
+  { id: 'visita',       label: 'Visitó el inmueble' },
+  { id: 'oferta',       label: 'Realizó una oferta' },
+  { id: 'contraoferta', label: 'Contraoferta' },
+  { id: 'otro',         label: 'Otro' },
+];
+
+export const FRECUENCIAS_RECORDATORIO = [
+  { id: '30', label: 'Cada 30 días' },
+  { id: '40', label: 'Cada 40 días' },
+  { id: '50', label: 'Cada 50 días' },
+  { id: 'personalizado', label: 'Personalizado' },
+];
+
+export const FRECUENCIAS_INFORME = [
+  { id: '30', label: 'Cada 30 días' },
+  { id: '45', label: 'Cada 45 días' },
+  { id: '60', label: 'Cada 60 días' },
 ];
 
 /* Días de alerta antes de vencimiento de contrato */
@@ -157,6 +221,7 @@ export const ICONS = {
   wallet:    '<path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4z"/>',
   briefcase: '<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/><line x1="12" y1="12" x2="12" y2="12.01"/>',
   building:  '<rect x="3" y="2" width="18" height="20" rx="1"/><path d="M9 22V12h6v10M8 7h2M8 11h2M14 7h2M14 11h2"/>',
+  eye:       '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>',
 };
 
 export function icon(name, cls = '') {

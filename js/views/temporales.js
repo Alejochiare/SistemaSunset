@@ -2,12 +2,12 @@
    VISTA · Alquileres Temporales
    ============================================================ */
 import { getState, sel, actions, subscribe } from '../store.js';
-import { icon, ESTADOS_TAREA } from '../config.js';
+import { icon, ESTADOS_TAREA, PASOS_TAREA } from '../config.js';
 import { esc, fmtFechaCorta, fmtMontoInput, valorMonto, parseFechaLocal } from '../lib.js';
 import { openModal } from '../components/modal.js';
 import { toast } from '../components/toast.js';
 import { imprimirReciboTemporal, imprimirResumenOcupacion, generarPDFInformeOcupacion } from '../imprimir.js';
-import { openTareaForm } from './forms.js';
+import { openTareaForm, openTareaDetalle } from './forms.js';
 
 const ESTADOS = [
   { id: 'confirmado', label: 'Confirmado', color: 'var(--primary)' },
@@ -128,6 +128,20 @@ export default function temporales(root, param) {
       if (confirm('¿Eliminar esta tarea?')) actions.deleteTarea(eliminarTarea.dataset.eliminarTarea);
       return;
     }
+    const pasoTarea = e.target.closest('[data-cambiar-estado-tarea]');
+    if (pasoTarea) {
+      const nuevoEstado = pasoTarea.dataset.estado;
+      actions.updateTarea(pasoTarea.dataset.cambiarEstadoTarea, { estado: nuevoEstado }).then(() => {
+        if (nuevoEstado === 'listo') toast('Tarea marcada como lista · pasó al historial');
+      });
+      return;
+    }
+    const verTarea = e.target.closest('[data-ver-tarea]');
+    if (verTarea) {
+      const t = getState().tareas.find(x => x.id === verTarea.dataset.verTarea);
+      if (t) openTareaDetalle(t);
+      return;
+    }
 
     const pf = e.target.closest('[data-filtro-temp]');
     if (pf) { filtro = pf.dataset.filtroTemp; render(); return; }
@@ -239,10 +253,17 @@ function pintarTemporales(el, { vista, filtro, anioAgenda, mesAgenda, histPropie
 /* ── Vista Mantenimiento: mantenimiento general de las propiedades + tareas
    puntuales ligadas a una reserva (problemas/incidencias del huésped) ── */
 function pintarMantenimiento(el) {
-  const { tareas } = getState();
-  const generales  = sel.tareasGeneralesTemporales();
-  const porReserva = tareas.filter(t => t.origen === 'temporal' && t.temporalId)
-    .sort((a, b) => (b.fecha||'').localeCompare(a.fecha||''));
+  const esHistorial = t => ['listo', 'cerrado'].includes(t.estado);
+  const ordenHistorial = (a, b) => (b.fechaCierre||b.fecha||'').localeCompare(a.fechaCierre||a.fecha||'');
+
+  const generalesTodas  = sel.tareasGeneralesTemporales();
+  const generales         = generalesTodas.filter(t => !esHistorial(t));
+  const generalesHist     = generalesTodas.filter(esHistorial).sort(ordenHistorial);
+
+  const porDeptoTodas = sel.tareasPorDepartamentoTemporales();
+  const porDepto     = porDeptoTodas.filter(t => !esHistorial(t));
+  const porDeptoHist = porDeptoTodas.filter(esHistorial).sort(ordenHistorial);
+
   const vencidas = sel.tareasVencidas().filter(t => t.origen === 'temporal');
 
   el.innerHTML = `
@@ -271,41 +292,81 @@ function pintarMantenimiento(el) {
         <div class="card-body" style="padding:0">
           ${generales.length ? generales.map(t => renderTareaTemp(t)).join('') : `<div class="empty-sm">Sin tareas de mantenimiento general. Cargá limpiezas, service de aire, etc.</div>`}
         </div>
+        ${generalesHist.length ? `
+        <details>
+          <summary style="cursor:pointer;padding:.7rem 1.1rem;font-weight:600;font-size:.8rem;color:var(--text-soft);border-top:1px solid var(--border);display:flex;align-items:center;gap:.5rem">
+            ${icon('check')} Historial (${generalesHist.length})
+          </summary>
+          <div style="border-top:1px solid var(--border)">
+            ${generalesHist.map(t => renderTareaTemp(t)).join('')}
+          </div>
+        </details>` : ''}
       </div>
 
       <div class="card">
         <div class="card-head">
-          <h3>${icon('alert')} Tareas por reserva</h3>
+          <h3>${icon('building')} Tareas por departamento</h3>
         </div>
         <div class="card-body" style="padding:0">
-          ${porReserva.length ? porReserva.map(t => renderTareaTemp(t)).join('') : `<div class="empty-sm">Sin problemas/incidencias registrados</div>`}
+          ${porDepto.length ? porDepto.map(t => renderTareaTemp(t)).join('') : `<div class="empty-sm">Sin tareas asignadas a un departamento</div>`}
         </div>
+        ${porDeptoHist.length ? `
+        <details>
+          <summary style="cursor:pointer;padding:.7rem 1.1rem;font-weight:600;font-size:.8rem;color:var(--text-soft);border-top:1px solid var(--border);display:flex;align-items:center;gap:.5rem">
+            ${icon('check')} Historial (${porDeptoHist.length})
+          </summary>
+          <div style="border-top:1px solid var(--border)">
+            ${porDeptoHist.map(t => renderTareaTemp(t)).join('')}
+          </div>
+        </details>` : ''}
       </div>
     </div>`;
 }
 
 function renderTareaTemp(t) {
-  const { temporales } = getState();
-  const estadoObj = ESTADOS_TAREA.find(e => e.id === t.estado);
+  const { temporales, propiedades } = getState();
   const reserva = t.temporalId ? temporales.find(x => x.id === t.temporalId) : null;
+  const propiedadId = sel.propiedadIdDeTarea(t);
+  const prop = propiedadId ? propiedades.find(p => p.id === propiedadId) : null;
   const hoy = new Date().toISOString().slice(0, 10);
-  const vencida = t.estado === 'pendiente' && t.fecha && t.fecha < hoy;
+  const vencida = !['listo', 'cerrado'].includes(t.estado) && t.fecha && t.fecha < hoy;
   return `
-    <div class="list-row" style="align-items:flex-start;gap:.75rem">
-      <div style="flex:1;min-width:0">
+    <div class="list-row list-row-hover" data-ver-tarea="${t.id}" style="align-items:flex-start;gap:.75rem;flex-wrap:wrap;cursor:pointer">
+      <div style="flex:1;min-width:180px">
         <div class="list-name" style="font-size:.875rem">${esc(t.titulo)}${vencida ? ' <span class="badge badge-danger" style="font-size:.65rem">Vencida</span>' : ''}</div>
         <div class="text-xs text-soft" style="margin-top:.15rem">
+          ${prop ? '🏠 ' + esc(prop.nombreTemporal || prop.direccion) + ' · ' : ''}
           ${fmtFechaCorta(t.fecha)}${t.hora ? ' · ' + esc(t.hora) : ''}
           ${t.asignadoA ? ' · 👤 ' + esc(t.asignadoA) : ''}
           ${reserva ? ' · ' + esc(reserva.huesped || 'Huésped') : ''}
           ${t.recurrenciaDias ? ' · 🔁' : ''}
         </div>
       </div>
-      <span class="badge ${estadoObj?.badge || 'badge-neutral'}" style="flex-shrink:0">${estadoObj?.label || t.estado}</span>
+      ${renderPasadorEstadoTemp(t)}
       <div style="display:flex;gap:.15rem;flex-shrink:0">
+        <button class="btn btn-xs btn-ghost" data-ver-tarea="${t.id}" title="Ver detalle">${icon('eye')}</button>
         <button class="btn btn-xs btn-ghost" data-editar-tarea="${t.id}" title="Editar">${icon('edit')}</button>
         <button class="btn btn-xs btn-ghost" data-eliminar-tarea="${t.id}" title="Eliminar" style="color:var(--danger)">${icon('trash')}</button>
       </div>
+    </div>`;
+}
+
+/* Pasador de estado: pendiente → en proceso → listo (clic en un paso lo aplica directo).
+   "cerrado" es un cierre manual aparte, se muestra como badge fijo sin pasador. */
+function renderPasadorEstadoTemp(t) {
+  if (t.estado === 'cerrado') {
+    const estadoObj = ESTADOS_TAREA.find(e => e.id === 'cerrado');
+    return `<span class="badge ${estadoObj?.badge || 'badge-neutral'}" style="flex-shrink:0">${estadoObj?.label || 'Cerrado'}</span>`;
+  }
+  const idx = Math.max(0, PASOS_TAREA.findIndex(p => p.id === t.estado));
+  return `
+    <div class="pasador-estado">
+      ${PASOS_TAREA.map((p, i) => `
+        ${i > 0 ? `<span class="pasador-linea ${i <= idx ? 'is-done' : ''}"></span>` : ''}
+        <button type="button" class="pasador-paso ${i < idx ? 'is-done' : ''} ${i === idx ? 'is-current' : ''} ${p.id === 'listo' ? 'pasador-paso-listo' : ''}"
+          data-cambiar-estado-tarea="${t.id}" data-estado="${p.id}" title="Marcar como ${p.label}">
+          <span class="pasador-dot"></span><span class="pasador-label">${p.label}</span>
+        </button>`).join('')}
     </div>`;
 }
 

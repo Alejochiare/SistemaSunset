@@ -114,6 +114,27 @@ select.field { cursor: pointer; appearance: none; padding-right: 2rem;
 .seg button { border: none; background: none; padding: .42rem .9rem; border-radius: var(--r-xs); font-weight: 600; font-size: .8rem; color: var(--text-soft); transition: all var(--transition); }
 .seg button.active { background: var(--surface); color: var(--text); box-shadow: var(--shadow-xs); }
 
+/* ---------- PASADOR DE ESTADO (tareas / mantenimiento) ---------- */
+.pasador-estado { display: inline-flex; align-items: center; }
+.pasador-paso {
+  display: flex; align-items: center; gap: .35rem; border: none; background: none; cursor: pointer;
+  padding: .2rem .3rem; border-radius: var(--r-xs); font-size: .68rem; font-weight: 600;
+  color: var(--text-faint); white-space: nowrap; transition: color var(--transition), background var(--transition);
+}
+.pasador-paso:hover { background: var(--surface-3); color: var(--text-soft); }
+.pasador-dot {
+  width: 9px; height: 9px; border-radius: 50%; background: var(--surface-3);
+  border: 2px solid var(--border); flex-shrink: 0; transition: all var(--transition);
+}
+.pasador-paso.is-done .pasador-dot { background: var(--info); border-color: var(--info); }
+.pasador-paso.is-current .pasador-dot { background: var(--warning); border-color: var(--warning); box-shadow: 0 0 0 3px var(--warning-soft); }
+.pasador-paso.is-current.pasador-paso-listo .pasador-dot { background: var(--success); border-color: var(--success); box-shadow: 0 0 0 3px var(--success-soft); }
+.pasador-paso.is-done .pasador-label,
+.pasador-paso.is-current .pasador-label { color: var(--text); }
+.pasador-linea { width: 14px; height: 2px; background: var(--border); flex-shrink: 0; }
+.pasador-linea.is-done { background: var(--info); }
+@media (max-width: 640px) { .pasador-label { display: none; } }
+
 /* ---------- MODAL ---------- */
 .modal-overlay {
   position: fixed; inset: 0; background: rgba(8,20,20,.55); backdrop-filter: blur(4px);

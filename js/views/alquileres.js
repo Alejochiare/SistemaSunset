@@ -2,10 +2,10 @@
    VISTA · Alquileres — contratos activos, cobros y vencimientos
    ============================================================ */
 import { getState, sel, actions, subscribe } from '../store.js';
-import { icon, CONTRATO_ESTADOS, ESTADOS_TAREA, MONEDAS, DIA_LIMITE_PAGO } from '../config.js';
+import { icon, CONTRATO_ESTADOS, ESTADOS_TAREA, PASOS_TAREA, MONEDAS, DIA_LIMITE_PAGO } from '../config.js';
 import { esc, fmtMoneda, fmtFechaCorta, garantesDeAlquiler, valorMonto, fmtMontoInput, parseFechaLocal, debounce } from '../lib.js';
 import { navegar } from '../router.js';
-import { openAlquilerForm, openCobroForm, openRenovacionForm, openTareaForm } from './forms.js';
+import { openAlquilerForm, openCobroForm, openRenovacionForm, openTareaForm, openTareaDetalle } from './forms.js';
 import { openModal } from '../components/modal.js';
 import { toast } from '../components/toast.js';
 import { imprimirRecibo, imprimirLiquidacion, imprimirFacturaDeuda, getAgencia, setAgencia } from '../imprimir.js';
@@ -33,6 +33,12 @@ export default function alquileres(root, param) {
     const btn = e.target.closest('[data-filtro]');
     if (btn) { filtro = btn.dataset.filtro; render(); return; }
 
+    const verTarea = e.target.closest('[data-ver-tarea]');
+    if (verTarea) {
+      const t = getState().tareas.find(x => x.id === verTarea.dataset.verTarea);
+      if (t) openTareaDetalle(t);
+      return;
+    }
     const editarTarea = e.target.closest('[data-editar-tarea]');
     if (editarTarea) {
       const t = getState().tareas.find(x => x.id === editarTarea.dataset.editarTarea);
@@ -42,6 +48,14 @@ export default function alquileres(root, param) {
     const eliminarTarea = e.target.closest('[data-eliminar-tarea]');
     if (eliminarTarea) {
       if (confirm('¿Eliminar esta tarea?')) actions.deleteTarea(eliminarTarea.dataset.eliminarTarea);
+      return;
+    }
+    const pasoTarea = e.target.closest('[data-cambiar-estado-tarea]');
+    if (pasoTarea) {
+      const nuevoEstado = pasoTarea.dataset.estado;
+      actions.updateTarea(pasoTarea.dataset.cambiarEstadoTarea, { estado: nuevoEstado }).then(() => {
+        if (nuevoEstado === 'listo') toast('Tarea marcada como lista · pasó al historial');
+      });
       return;
     }
     const irTarea = e.target.closest('[data-ir-tarea]');
@@ -84,6 +98,9 @@ function pintarAlquileresVista(el, { vista, filtro, busqueda }) {
 function pintarMantenimientoAlq(el) {
   const { tareas, alquileres, clientes, propiedades } = getState();
   const deAlquiler = tareas.filter(t => t.origen === 'alquiler').sort((a, b) => (a.fecha||'').localeCompare(b.fecha||''));
+  const activas   = deAlquiler.filter(t => !['listo', 'cerrado'].includes(t.estado));
+  const historial = deAlquiler.filter(t => ['listo', 'cerrado'].includes(t.estado))
+    .sort((a, b) => (b.fechaCierre||b.fecha||'').localeCompare(a.fechaCierre||a.fecha||''));
   const vencidas = sel.tareasVencidas().filter(t => t.origen === 'alquiler');
 
   el.innerHTML = `
@@ -100,21 +117,32 @@ function pintarMantenimientoAlq(el) {
       </div>
     </div>` : ''}
 
-    ${deAlquiler.length ? `
+    ${activas.length ? `
     <div class="card" style="padding:0">
-      ${deAlquiler.map(t => renderTareaConContrato(t, { alquileres, clientes, propiedades })).join('')}
+      ${activas.map(t => renderTareaConContrato(t, { alquileres, clientes, propiedades })).join('')}
     </div>` : `
     <div class="empty">
       ${icon('alert')}
-      <h3>Sin tareas registradas</h3>
+      <h3>Sin tareas activas</h3>
       <p>Se cargan desde acá o desde el detalle de cada contrato.</p>
-    </div>`}`;
+    </div>`}
+
+    ${historial.length ? `
+    <div class="card" style="margin-top:1.25rem;padding:0">
+      <details>
+        <summary style="cursor:pointer;padding:.9rem 1.1rem;font-weight:600;font-size:.875rem;color:var(--text-soft);display:flex;align-items:center;gap:.5rem">
+          ${icon('check')} Historial · Tareas listas (${historial.length})
+        </summary>
+        <div style="border-top:1px solid var(--border)">
+          ${historial.map(t => renderTareaConContrato(t, { alquileres, clientes, propiedades })).join('')}
+        </div>
+      </details>
+    </div>` : ''}`;
 }
 
 function renderTareaConContrato(t, { alquileres, clientes, propiedades }) {
-  const estadoObj = ESTADOS_TAREA.find(e => e.id === t.estado);
   const hoy = new Date().toISOString().slice(0, 10);
-  const vencida = t.estado === 'pendiente' && t.fecha && t.fecha < hoy;
+  const vencida = !['listo', 'cerrado'].includes(t.estado) && t.fecha && t.fecha < hoy;
   const alq  = t.alquilerId ? alquileres.find(a => a.id === t.alquilerId) : null;
   const inq  = alq ? clientes.find(c => c.id === alq.inquilinoId) : (t.clienteId ? clientes.find(c => c.id === t.clienteId) : null);
   const prop = t.propiedadId ? propiedades.find(p => p.id === t.propiedadId) : null;
@@ -132,11 +160,31 @@ function renderTareaConContrato(t, { alquileres, clientes, propiedades }) {
         <div class="list-name">${esc(t.titulo)}${vencida ? ' <span class="badge badge-danger" style="font-size:.65rem">Vencida</span>' : ''}</div>
         <div class="text-xs text-soft truncate">${esc(partes)}</div>
       </div>
-      <div style="display:flex;align-items:center;gap:.5rem;flex-shrink:0">
-        <span class="badge ${estadoObj?.badge || 'badge-neutral'}">${estadoObj?.label || t.estado}</span>
-        <button class="btn btn-xs btn-ghost" data-editar-tarea="${t.id}" title="Editar" onclick="event.stopPropagation()">${icon('edit')}</button>
-        <button class="btn btn-xs btn-ghost" data-eliminar-tarea="${t.id}" title="Eliminar" onclick="event.stopPropagation()" style="color:var(--danger)">${icon('trash')}</button>
+      <div style="display:flex;align-items:center;gap:.6rem;flex-shrink:0">
+        ${renderPasadorEstado(t)}
+        <button class="btn btn-xs btn-ghost" data-ver-tarea="${t.id}" title="Ver detalle">${icon('eye')}</button>
+        <button class="btn btn-xs btn-ghost" data-editar-tarea="${t.id}" title="Editar">${icon('edit')}</button>
+        <button class="btn btn-xs btn-ghost" data-eliminar-tarea="${t.id}" title="Eliminar" style="color:var(--danger)">${icon('trash')}</button>
       </div>
+    </div>`;
+}
+
+/* Pasador de estado: pendiente → en proceso → listo (clic en un paso lo aplica directo).
+   "cerrado" es un cierre manual aparte, se muestra como badge fijo sin pasador. */
+function renderPasadorEstado(t) {
+  if (t.estado === 'cerrado') {
+    const estadoObj = ESTADOS_TAREA.find(e => e.id === 'cerrado');
+    return `<span class="badge ${estadoObj?.badge || 'badge-neutral'}" style="flex-shrink:0">${estadoObj?.label || 'Cerrado'}</span>`;
+  }
+  const idx = Math.max(0, PASOS_TAREA.findIndex(p => p.id === t.estado));
+  return `
+    <div class="pasador-estado">
+      ${PASOS_TAREA.map((p, i) => `
+        ${i > 0 ? `<span class="pasador-linea ${i <= idx ? 'is-done' : ''}"></span>` : ''}
+        <button type="button" class="pasador-paso ${i < idx ? 'is-done' : ''} ${i === idx ? 'is-current' : ''} ${p.id === 'listo' ? 'pasador-paso-listo' : ''}"
+          data-cambiar-estado-tarea="${t.id}" data-estado="${p.id}" title="Marcar como ${p.label}">
+          <span class="pasador-dot"></span><span class="pasador-label">${p.label}</span>
+        </button>`).join('')}
     </div>`;
 }
 
@@ -311,7 +359,9 @@ function pintarDetalle(el, id) {
 
   // ── Tareas / mantenimiento del contrato ──────────────────
   const tareas = sel.tareasDeAlquiler(a.id);
-  const tareasPend = tareas.filter(t => t.estado === 'pendiente');
+  const tareasPend = tareas.filter(t => !['listo', 'cerrado'].includes(t.estado));
+  const tareasHistorial = tareas.filter(t => ['listo', 'cerrado'].includes(t.estado))
+    .sort((a, b) => (b.fechaCierre||b.fecha||'').localeCompare(a.fechaCierre||a.fecha||''));
 
   // ── Render ────────────────────────────────────────────────
   el.innerHTML = `
@@ -535,8 +585,17 @@ function pintarDetalle(el, id) {
         <button class="btn btn-sm btn-primary" id="btnNuevaTarea">${icon('plus')} Nueva tarea</button>
       </div>
       <div class="card-body" style="padding:0">
-        ${tareas.length ? tareas.map(t => renderTarea(t)).join('') : `<div class="empty-sm">Sin tareas registradas para este contrato</div>`}
+        ${tareasPend.length ? tareasPend.map(t => renderTarea(t)).join('') : `<div class="empty-sm">Sin tareas activas para este contrato</div>`}
       </div>
+      ${tareasHistorial.length ? `
+      <details>
+        <summary style="cursor:pointer;padding:.7rem 1.1rem;font-weight:600;font-size:.8rem;color:var(--text-soft);border-top:1px solid var(--border);display:flex;align-items:center;gap:.5rem">
+          ${icon('check')} Historial · Tareas listas (${tareasHistorial.length})
+        </summary>
+        <div style="border-top:1px solid var(--border)">
+          ${tareasHistorial.map(t => renderTarea(t)).join('')}
+        </div>
+      </details>` : ''}
     </div>
 
     <div style="padding-top:.75rem;border-top:1px solid var(--border);display:flex;gap:1rem;flex-wrap:wrap">
@@ -641,6 +700,13 @@ function pintarDetalle(el, id) {
   el.querySelector('#btnNuevaTarea')?.addEventListener('click', () => {
     openTareaForm(null, () => {}, { origen: 'alquiler', alquilerId: a.id, propiedadId: a.propiedadId, clienteId: a.inquilinoId });
   });
+  el.querySelectorAll('[data-ver-tarea]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const t = getState().tareas.find(x => x.id === btn.dataset.verTarea);
+      if (t) openTareaDetalle(t);
+    });
+  });
   el.querySelectorAll('[data-editar-tarea]').forEach(btn => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -654,16 +720,24 @@ function pintarDetalle(el, id) {
       if (confirm('¿Eliminar esta tarea?')) actions.deleteTarea(btn.dataset.eliminarTarea);
     });
   });
+  el.querySelectorAll('[data-cambiar-estado-tarea]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const nuevoEstado = btn.dataset.estado;
+      actions.updateTarea(btn.dataset.cambiarEstadoTarea, { estado: nuevoEstado }).then(() => {
+        if (nuevoEstado === 'listo') toast('Tarea marcada como lista · pasó al historial');
+      });
+    });
+  });
 }
 
 /* Fila de una tarea (usada en Alquileres y Temporales) */
 function renderTarea(t) {
-  const estadoObj = ESTADOS_TAREA.find(e => e.id === t.estado);
   const hoy = new Date().toISOString().slice(0, 10);
-  const vencida = t.estado === 'pendiente' && t.fecha && t.fecha < hoy;
+  const vencida = !['listo', 'cerrado'].includes(t.estado) && t.fecha && t.fecha < hoy;
   return `
-    <div class="list-row" style="align-items:flex-start;gap:.75rem">
-      <div style="flex:1;min-width:0">
+    <div class="list-row" style="align-items:flex-start;gap:.75rem;flex-wrap:wrap">
+      <div style="flex:1;min-width:180px">
         <div class="list-name" style="font-size:.875rem">${esc(t.titulo)}${vencida ? ' <span class="badge badge-danger" style="font-size:.65rem">Vencida</span>' : ''}</div>
         <div class="text-xs text-soft" style="margin-top:.15rem">
           ${fmtFechaCorta(t.fecha)}${t.hora ? ' · ' + esc(t.hora) : ''}
@@ -672,8 +746,9 @@ function renderTarea(t) {
           ${t.recurrenciaDias ? ' · 🔁' : ''}
         </div>
       </div>
-      <span class="badge ${estadoObj?.badge || 'badge-neutral'}" style="flex-shrink:0">${estadoObj?.label || t.estado}</span>
+      ${renderPasadorEstado(t)}
       <div style="display:flex;gap:.15rem;flex-shrink:0">
+        <button class="btn btn-xs btn-ghost" data-ver-tarea="${t.id}" title="Ver detalle">${icon('eye')}</button>
         <button class="btn btn-xs btn-ghost" data-editar-tarea="${t.id}" title="Editar">${icon('edit')}</button>
         <button class="btn btn-xs btn-ghost" data-eliminar-tarea="${t.id}" title="Eliminar" style="color:var(--danger)">${icon('trash')}</button>
       </div>

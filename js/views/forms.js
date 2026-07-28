@@ -3,13 +3,14 @@
    ============================================================ */
 import { openModal } from '../components/modal.js';
 import { toast } from '../components/toast.js';
-import { actions, getState } from '../store.js';
-import { $, esc, garantesDeAlquiler, fmtMontoInput, valorMonto } from '../lib.js';
+import { actions, getState, sel as selStore } from '../store.js';
+import { $, esc, garantesDeAlquiler, fmtMontoInput, valorMonto, fmtFechaCorta, waLink } from '../lib.js';
 import {
   TIPOS_CLIENTE, TIPOS_PROPIEDAD, TIPOS_OPERACION, MONEDAS,
   ORIGENES, TIPOS_AJUSTE, FRECUENCIAS_AJUSTE, PROP_ESTADOS,
   VENTA_ESTADOS, TIPOS_EVENTO, icon, DIA_LIMITE_PAGO,
-  TIPOS_TAREA, ESTADOS_TAREA, FRECUENCIAS_TAREA
+  TIPOS_TAREA, ESTADOS_TAREA, FRECUENCIAS_TAREA,
+  EXCLUSIVIDAD_VENTA, PLAZOS_COMERCIALIZACION, FRECUENCIAS_RECORDATORIO, FRECUENCIAS_INFORME
 } from '../config.js';
 
 const opts = (arr, sel) => arr.map(o => {
@@ -459,12 +460,58 @@ export function openPropForm(prop = null, onDone) {
             </div>
           </div>
           <label style="display:flex;align-items:center;gap:.8rem;cursor:pointer;font-size:.92rem;font-weight:500">
-            <input type="checkbox" name="habilitadaVenta" value="1" ${prop.habilitadaVenta?'checked':''} style="width:18px;height:18px;cursor:pointer">
+            <input type="checkbox" name="habilitadaVenta" id="chkHabVenta" value="1" ${prop.habilitadaVenta?'checked':''} style="width:18px;height:18px;cursor:pointer">
             <span>
               <div style="font-weight:600;color:var(--text)">🏠 Vender</div>
-              <small style="color:var(--text-soft);display:block;margin-top:.15rem">Venta de la propiedad</small>
+              <small style="color:var(--text-soft);display:block;margin-top:.15rem">Venta de la propiedad — habilita el circuito de comercialización en "Ventas"</small>
             </span>
           </label>
+        </div>
+
+        <div id="blkInfoVenta" style="display:${prop.habilitadaVenta?'block':'none'}">
+          <h3 class="form-section-title" style="margin-top:1.5rem">Información de venta</h3>
+          <div class="form-grid">
+            <div class="form-group"><label>Comisión inmobiliaria (%)</label>
+              <input name="comisionInmobiliaria" type="number" min="0" step="0.1" value="${prop.comisionInmobiliaria ?? ''}"></div>
+            <div class="form-group"><label>Comisión vendedor (%)</label>
+              <input name="comisionVendedor" type="number" min="0" step="0.1" value="${prop.comisionVendedor ?? ''}"></div>
+            <div class="form-group"><label>Comisión comprador (%)</label>
+              <input name="comisionComprador" type="number" min="0" step="0.1" value="${prop.comisionComprador ?? ''}"></div>
+            <div class="form-group"><label>Fecha de publicación</label>
+              <input name="fechaPublicacionVenta" type="date" value="${(prop.fechaPublicacionVenta || '').slice(0, 10)}"></div>
+            <div class="form-group"><label>Exclusividad</label>
+              <select name="exclusividad">${opts(EXCLUSIVIDAD_VENTA, prop.exclusividad || 'exclusiva')}</select></div>
+            <div class="form-group"><label>Vencimiento autorización de venta</label>
+              <input name="fechaVencimientoAutorizacion" type="date" value="${(prop.fechaVencimientoAutorizacion || '').slice(0, 10)}"></div>
+            <div class="form-group"><label>Plazo de comercialización</label>
+              <select name="plazoComercializacion" id="selPlazo">${opts(PLAZOS_COMERCIALIZACION, prop.plazoComercializacion || '180')}</select></div>
+            <div class="form-group" id="blkPlazoCustom" style="${prop.plazoComercializacion === 'personalizado' ? '' : 'display:none'}">
+              <label>Días (personalizado)</label>
+              <input name="plazoComercializacionDias" type="number" min="1" value="${prop.plazoComercializacionDias || ''}"></div>
+            <div class="form-group"><label>Recordatorio de contacto al propietario</label>
+              <select name="frecuenciaRecordatorioDias" id="selFrecRecordatorio">${opts(FRECUENCIAS_RECORDATORIO, prop.frecuenciaRecordatorioDias || '30')}</select></div>
+            <div class="form-group" id="blkRecordatorioCustom" style="${prop.frecuenciaRecordatorioDias === 'personalizado' ? '' : 'display:none'}">
+              <label>Días (personalizado)</label>
+              <input name="frecuenciaRecordatorioDiasCustom" type="number" min="1" value="${prop.frecuenciaRecordatorioDiasCustom || ''}"></div>
+            <div class="form-group"><label>Informes automáticos cada</label>
+              <select name="frecuenciaInformeDias">${opts(FRECUENCIAS_INFORME, prop.frecuenciaInformeDias || '30')}</select></div>
+            <div class="form-group"><label>Estado de conservación</label>
+              <select name="estadoConservacion">
+                <option value="">— Sin especificar —</option>
+                <option value="excelente" ${prop.estadoConservacion === 'excelente' ? 'selected' : ''}>Excelente</option>
+                <option value="bueno" ${prop.estadoConservacion === 'bueno' ? 'selected' : ''}>Bueno</option>
+                <option value="regular" ${prop.estadoConservacion === 'regular' ? 'selected' : ''}>Regular</option>
+                <option value="malo" ${prop.estadoConservacion === 'malo' ? 'selected' : ''}>Malo</option>
+              </select></div>
+            <div class="form-group">
+              <label style="display:flex;align-items:center;gap:.5rem;cursor:pointer;margin-top:1.6rem">
+                <input type="checkbox" name="flexiblePropietario" value="1" ${prop.flexiblePropietario ? 'checked' : ''} style="width:16px;height:16px">
+                Propietario flexible (precio/condiciones)
+              </label>
+            </div>
+            <div class="form-group full"><label>Descripción optimizada para publicaciones (Meta Ads, Instagram)</label>
+              <textarea name="descripcionAds" rows="3" placeholder="Copy corto y atractivo para usar en anuncios pagos y redes.">${esc(prop.descripcionAds || '')}</textarea></div>
+          </div>
         </div>
 
         <h3 class="form-section-title" style="margin-top:1.5rem">Precios</h3>
@@ -499,7 +546,7 @@ export function openPropForm(prop = null, onDone) {
           <input id="inputFotos" type="file" accept="image/*" multiple style="display:none">
         </label>
         <input type="hidden" name="fotosJSON" value="${esc(JSON.stringify(fotosGuardadas))}">
-        <p class="text-xs text-soft" style="margin-top:.4rem">Las fotos se suben automáticamente al sitio web. La primera (marcada como "Portada") es la que se muestra como foto principal.</p>
+        <p class="text-xs text-soft" style="margin-top:.4rem">Las fotos se suben automáticamente al sitio web. La primera (marcada como "Portada") es la que se muestra como foto principal. Se requiere al menos una foto para publicar la propiedad (mientras esté disponible/reservada).</p>
 
         <h3 class="form-section-title" style="margin-top:1.5rem">Sitio web</h3>
         <label style="display:flex;align-items:center;gap:.6rem;cursor:pointer;font-size:.9rem">
@@ -514,6 +561,17 @@ export function openPropForm(prop = null, onDone) {
       // Mostrar/ocultar el nombre corto según si es alquiler temporal
       ctx.overlay.querySelector('#chkHabTemporal').addEventListener('change', (e) => {
         ctx.overlay.querySelector('#blkNombreTemporal').style.display = e.target.checked ? 'flex' : 'none';
+      });
+
+      // Mostrar/ocultar la sección de información de venta
+      ctx.overlay.querySelector('#chkHabVenta').addEventListener('change', (e) => {
+        ctx.overlay.querySelector('#blkInfoVenta').style.display = e.target.checked ? 'block' : 'none';
+      });
+      ctx.overlay.querySelector('#selPlazo')?.addEventListener('change', (e) => {
+        ctx.overlay.querySelector('#blkPlazoCustom').style.display = e.target.value === 'personalizado' ? 'block' : 'none';
+      });
+      ctx.overlay.querySelector('#selFrecRecordatorio')?.addEventListener('change', (e) => {
+        ctx.overlay.querySelector('#blkRecordatorioCustom').style.display = e.target.value === 'personalizado' ? 'block' : 'none';
       });
 
       // Buscador de propietario
@@ -594,6 +652,12 @@ export function openPropForm(prop = null, onDone) {
         const f = $('#propForm', ctx.overlay);
         if (!hiddenId.value) { searchInput.focus(); toast('Seleccioná un propietario', { tipo: 'warning' }); return; }
         if (!f.direccion.value.trim()) { f.direccion.focus(); toast('La dirección es obligatoria', { tipo: 'warning' }); return; }
+        const estadoElegido = f.estado.value;
+        const seVaAPublicar = !!ctx.overlay.querySelector('[name="publicadoWeb"]')?.checked;
+        if (seVaAPublicar && !['alquilada', 'vendida'].includes(estadoElegido) && fotos.length === 0) {
+          toast('Subí al menos una foto para publicarla en el sitio web (o desmarcá "Publicar en el sitio web")', { tipo: 'warning' });
+          return;
+        }
         const fd = new FormData(f);
         const data = Object.fromEntries(fd.entries());
         // Numéricos (cantidades)
@@ -601,6 +665,10 @@ export function openPropForm(prop = null, onDone) {
           data[k] = data[k] ? Number(data[k]) : null;
         });
         data.pctPropietarioTemporal = data.pctPropietarioTemporal !== '' ? Number(data.pctPropietarioTemporal) : 70;
+        // Numéricos de venta
+        ['comisionInmobiliaria','comisionVendedor','comisionComprador','plazoComercializacionDias','frecuenciaRecordatorioDiasCustom'].forEach(k => {
+          data[k] = data[k] ? Number(data[k]) : null;
+        });
         // Montos (con formato de miles a limpiar)
         ['precioAlquiler','precioVenta','expensas'].forEach(k => {
           data[k] = data[k] ? valorMonto(data[k]) : null;
@@ -611,7 +679,8 @@ export function openPropForm(prop = null, onDone) {
         data.habilitadaAlquiler = !!ctx.overlay.querySelector('[name="habilitadaAlquiler"]')?.checked;
         data.habilitadaTemporal = !!ctx.overlay.querySelector('[name="habilitadaTemporal"]')?.checked;
         data.habilitadaVenta = !!ctx.overlay.querySelector('[name="habilitadaVenta"]')?.checked;
-        data.publicadoWeb = !!ctx.overlay.querySelector('[name="publicadoWeb"]')?.checked;
+        data.flexiblePropietario = !!ctx.overlay.querySelector('[name="flexiblePropietario"]')?.checked;
+        data.publicadoWeb = seVaAPublicar;
         // Fotos
         data.fotos = fotos;
         delete data.fotosJSON;
@@ -1391,6 +1460,51 @@ export function openTareaForm(tarea = null, onDone, presets = {}) {
         if (ed) { await actions.updateTarea(tarea.id, data); toast('Tarea actualizada'); }
         else { await actions.createTarea(data); toast('Tarea creada'); }
         ctx.close(); onDone?.();
+      });
+    }
+  });
+}
+
+/* ── Ficha de una tarea: vista de solo lectura con toda la información
+   (la fila de la lista solo muestra el título, acá se ve todo lo demás). ── */
+export function openTareaDetalle(tarea) {
+  const { clientes, propiedades, temporales, alquileres } = getState();
+  const cliente  = tarea.clienteId   ? clientes.find(c => c.id === tarea.clienteId)     : null;
+  const propiedadId = selStore.propiedadIdDeTarea(tarea);
+  const prop     = propiedadId ? propiedades.find(p => p.id === propiedadId) : null;
+  const reserva  = tarea.temporalId  ? temporales.find(x => x.id === tarea.temporalId)  : null;
+  const contrato = tarea.alquilerId  ? alquileres.find(a => a.id === tarea.alquilerId)  : null;
+  const estadoObj = ESTADOS_TAREA.find(e => e.id === tarea.estado);
+  const tipoObj    = TIPOS_TAREA.find(t => t.id === tarea.tipo);
+  const frecObj    = FRECUENCIAS_TAREA.find(f => f.id === String(tarea.recurrenciaDias || ''));
+
+  const fila = (label, valor) => valor ? `
+    <div class="form-group"><label>${label}</label><div style="font-size:.9rem;padding-top:.15rem">${valor}</div></div>` : '';
+
+  openModal({
+    title: tarea.titulo || 'Tarea',
+    bodyHTML: `
+      <div class="form-grid">
+        <div class="form-group full">
+          <span class="badge ${estadoObj?.badge || 'badge-neutral'}">${estadoObj?.label || tarea.estado}</span>
+          ${tipoObj ? `<span class="badge badge-neutral" style="margin-left:.4rem">${esc(tipoObj.label)}</span>` : ''}
+        </div>
+        ${fila('Día', fmtFechaCorta(tarea.fecha) + (tarea.hora ? ' · ' + esc(tarea.hora) : ''))}
+        ${fila('Asignado a', tarea.asignadoA ? '👤 ' + esc(tarea.asignadoA) : '')}
+        ${fila('Departamento / Propiedad', prop ? esc(prop.nombreTemporal || prop.direccion) : '')}
+        ${fila('Cliente', cliente ? esc(cliente.nombre) + (cliente.telefono ? ` <a href="${waLink(cliente.telefono, '')}" target="_blank" style="color:var(--success)">${icon('whatsapp')}</a>` : '') : '')}
+        ${fila('Reserva relacionada', reserva ? esc(reserva.huesped || 'Huésped') + ` · ${reserva.checkIn||'?'} → ${reserva.checkOut||'?'}` : '')}
+        ${fila('Contrato relacionado', contrato ? esc(clientes.find(c => c.id === contrato.inquilinoId)?.nombre || 'Contrato') : '')}
+        ${fila('Se repite', frecObj && frecObj.id ? esc(frecObj.label) : '')}
+        ${fila('Tarea creada', tarea.fechaAlta ? fmtFechaCorta(tarea.fechaAlta.slice(0,10)) : '')}
+        ${fila('Cerrada', tarea.fechaCierre ? fmtFechaCorta(tarea.fechaCierre) : '')}
+        ${tarea.notas ? `<div class="form-group full"><label>Notas</label><div style="font-size:.9rem;white-space:pre-wrap;padding-top:.15rem">${esc(tarea.notas)}</div></div>` : ''}
+      </div>`,
+    footerHTML: `<button class="btn btn-ghost" data-close>Cerrar</button><button class="btn btn-primary" id="editarDesdeDetalle">${icon('edit')} Editar</button>`,
+    onMount(ctx) {
+      $('#editarDesdeDetalle', ctx.overlay).addEventListener('click', () => {
+        ctx.close();
+        openTareaForm(tarea, () => {});
       });
     }
   });
