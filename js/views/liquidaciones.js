@@ -624,9 +624,32 @@ function renderHistorial(historial) {
     </div>`;
 }
 
+/* Reconstruye, a partir de los cobros liquidados guardados en la liquidación, el detalle
+   propiedad + período + importe de cada uno — para que al reimprimir desde el historial
+   la factura siga identificando exactamente qué se pagó, sin depender de que el contrato
+   o el cobro original sigan intactos. */
+function detalleDeLiquidacion(l, state) {
+  const { alquileres, propiedades } = state;
+  const ids = (l.liquidadosCobros && l.liquidadosCobros.length) ? l.liquidadosCobros : (l.cobroId ? [l.cobroId] : []);
+  if (!ids.length) return null;
+  const detalle = [];
+  ids.forEach(cid => {
+    for (const a of alquileres) {
+      const c = (a.cobros || []).find(x => x.id === cid);
+      if (c) {
+        const prop = propiedades.find(p => p.id === a.propiedadId);
+        detalle.push({ propiedad: prop?.direccion || '—', periodo: mesLabel(c.mes), monto: Number(c.monto) || 0 });
+        break;
+      }
+    }
+  });
+  return detalle.length ? detalle : null;
+}
+
 /* ── Generar PDF ── */
 function generarPDF(id) {
-  const { liquidaciones: list, alquileres, clientes, propietarios, propiedades } = getState();
+  const state = getState();
+  const { liquidaciones: list, alquileres, clientes, propietarios, propiedades } = state;
   const l    = (list || []).find(x => x.id === id);
   if (!l) return;
   const alq  = alquileres.find(a => a.id === l.alquilerId) || {};
@@ -634,9 +657,13 @@ function generarPDF(id) {
   const prop = propiedades.find(p => p.id === (l.propiedadId || alq.propiedadId)) || {};
   const own  = propietarios.find(p => p.id === (l.propietarioId || alq.propietarioId)) || {};
   const cobroSint = { monto: l.montoAlquiler, mes: l.mes, fechaPago: l.fechaPago };
+  const periodoLabel = !l.mes && l.meses && l.meses.length > 1
+    ? `${mesLabel(l.meses[0])} – ${mesLabel(l.meses[l.meses.length - 1])}`
+    : null;
+  const detalle = detalleDeLiquidacion(l, state);
   imprimirLiquidacion({ alq, cobro: cobroSint, inquilino: inq, propiedad: prop, propietario: own,
     pctHonorarios: l.pctHonorarios || 0, descuentos: l.descuentos || [], formaPago: l.formaPago || 'Efectivo',
-    pagos: l.pagos || [] });
+    pagos: l.pagos || [], periodoLabel, detalle });
 }
 
 /* ── Formulario liquidar GRUPAL (múltiples propiedades de un propietario) ── */
@@ -824,6 +851,12 @@ export function abrirFormLiquidacionGrupal(grupo, onDone) {
             descuentos: liq.descuentos || [],
             formaPago: liq.formaPago || 'Efectivo',
             pagos: liq.pagos || [],
+            periodoLabel: mesesLabelStr,
+            detalle: detalleProps.map(d => ({
+              propiedad: d.prop?.direccion || '—',
+              periodo: d.periodos.map(p => mesLabel(p.mes)).join(', '),
+              monto: d.total,
+            })),
           });
         }
 
