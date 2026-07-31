@@ -196,6 +196,13 @@ function abrirVentana(titulo, cuerpo) {
   win.document.close();
 }
 
+/* Logo de Sunset para membretar cualquier documento impreso. Se resuelve como URL absoluta
+   contra la página actual (no solo location.origin) para que funcione igual en localhost,
+   en GitHub Pages con subcarpeta (/SistemaSunset/) y en cualquier otro despliegue. */
+function defaultLogoUrl() {
+  try { return new URL('logooo.png', location.href).href; } catch { return 'logooo.png'; }
+}
+
 /* ── Header común del documento ──────────────────────────── */
 function headerDoc(ag, tipo, num, fecha, logoUrl) {
   const nombre = ag.nombre || 'Inmobiliaria';
@@ -203,11 +210,12 @@ function headerDoc(ag, tipo, num, fecha, logoUrl) {
   const dir    = [ag.direccion, ag.localidad].filter(Boolean).join(' | ');
   const tel    = ag.telefono || '';
   const iva    = ag.iva     || 'Responsable Monotributo';
+  const logo   = logoUrl || defaultLogoUrl();
 
   return `
   <div class="doc-header">
     <div style="display:flex;align-items:center;gap:10px">
-      ${logoUrl ? `<img src="${logoUrl}" style="height:44px;width:auto;object-fit:contain;flex-shrink:0">` : ''}
+      ${logo ? `<img src="${logo}" style="height:44px;width:auto;object-fit:contain;flex-shrink:0">` : ''}
       <div>
         <div class="agencia-logo">${esc(nombre)}</div>
         <div class="agencia-sub">${esc(iva)}</div>
@@ -308,6 +316,16 @@ export function imprimirRecibo({ alq, cobro, inquilino, propiedad, propietario }
         <div class="total-val">${fmtMoneda(monto)}</div>
       </div>
     </div>
+
+    <!-- Servicios (luz / impuestos), si se registraron para este pago -->
+    ${cobro.servicios && (cobro.servicios.luz || cobro.servicios.impuestos) ? `
+    <div class="contrato-blk">
+      <div class="contrato-titulo">Servicios</div>
+      <div class="contrato-grid">
+        ${cobro.servicios.luz ? `<div class="contrato-row"><span class="lbl">Luz:</span> <strong style="color:${cobro.servicios.luz.pagado ? '#2e7d32' : '#c62828'}">${cobro.servicios.luz.pagado ? 'Sin deudas registradas' : 'Registra deuda pendiente'}</strong></div>` : ''}
+        ${cobro.servicios.impuestos ? `<div class="contrato-row"><span class="lbl">Impuestos:</span> <strong style="color:${cobro.servicios.impuestos.pagado ? '#2e7d32' : '#c62828'}">${cobro.servicios.impuestos.pagado ? 'Sin deudas registradas' : 'Registra deuda pendiente'}</strong></div>` : ''}
+      </div>
+    </div>` : ''}
 
     <!-- Letras y forma de pago -->
     <div class="letras-blk">
@@ -1008,11 +1026,10 @@ function construirResumenOcupacionHTML({ propietario, mes, propiedades = [], fil
   const totalDe = (t) => (t.precioTotal || (nochesDe(t) * (t.precioPorNoche || 0))) + (t.montoExtension || 0);
 
   let totalGeneral = 0;
-  const logoUrl = `${location.origin}/logooo.png`;
 
   const cuerpo = `
   <div class="copia">
-    ${headerDoc(ag, 'INFORME', num, fecha, logoUrl)}
+    ${headerDoc(ag, 'INFORME', num, fecha)}
 
     <div class="banda-concepto">
       RESUMEN DE OCUPACIÓN — ALQUILER TEMPORARIO · ${mesLabel(mes)}

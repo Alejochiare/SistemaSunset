@@ -280,7 +280,7 @@ function pintarLista(el, filtro, busqueda) {
                 <div style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;margin-bottom:.2rem">
                   <span class="list-name">${esc(inq?.nombre || '—')}</span>
                   ${cobrosImpagos.length ? `<span class="badge badge-danger" style="font-size:.68rem">${cobrosImpagos.length} mes${cobrosImpagos.length!==1?'es':''} sin pagar</span>` : ''}
-                  ${necesitaAumento ? `<span class="badge badge-warning" style="font-size:.68rem">⬆ Aumentar</span>` : ''}
+                  ${necesitaAumento ? `<span class="badge badge-warning" style="font-size:.68rem">⬆ Aumentar${ajInfo.vencidos > 0 ? '' : ajInfo.diasHastaProx <= 0 ? ' · hoy' : ` · en ${ajInfo.diasHastaProx}d`}</span>` : ''}
                 </div>
                 <div class="text-xs text-soft">${esc(prop?.direccion || '—')}${prop?.ciudad ? ' · ' + esc(prop.ciudad) : ''}</div>
                 <div class="text-xs" style="margin-top:.2rem;color:var(--text-soft)">
@@ -518,7 +518,9 @@ function pintarDetalle(el, id) {
       <div style="flex:1;min-width:200px">
         <div style="font-weight:700;font-size:.95rem">Contrato por aumentar</div>
         <div style="font-size:.82rem;color:var(--text-soft);margin-top:.2rem">
-          ${ajInfo.pendientes} aumento${ajInfo.pendientes>1?'s':''} pendiente${ajInfo.pendientes>1?'s':''} ·
+          ${ajInfo.vencidos > 0
+            ? `${ajInfo.pendientes} aumento${ajInfo.pendientes>1?'s':''} pendiente${ajInfo.pendientes>1?'s':''}`
+            : `Próximo aumento ${ajInfo.diasHastaProx <= 0 ? 'hoy' : `dentro de ${ajInfo.diasHastaProx} día${ajInfo.diasHastaProx!==1?'s':''}`}`} ·
           Monto actual: <strong>${fmtMoneda(montoActual, a.moneda)}</strong> ·
           ${a.tipoAjuste === 'fijo' && a.porcentajeAjuste
             ? `Calculado automáticamente (+${a.porcentajeAjuste}%) → <strong style="color:var(--success)">${fmtMoneda(Math.round(montoActual*(1+a.porcentajeAjuste/100)), a.moneda)}</strong>`
@@ -675,6 +677,21 @@ function pintarDetalle(el, id) {
       if (!confirm(msg)) return;
       await actions.deshacerCobro(id, cobroId);
       toast('Registro eliminado');
+    });
+  });
+
+  /* tocar el chip de luz/impuestos cambia su estado en el momento — sirve para el caso de
+     "lo pagó recién a los 2 días", sin tener que volver a abrir todo el formulario de cobro */
+  el.querySelectorAll('[data-toggle-servicio]').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const [cobroId, servicio] = btn.dataset.toggleServicio.split(':');
+      const cobro = (a.cobros || []).find(c => c.id === cobroId);
+      if (!cobro?.servicios?.[servicio]) return;
+      const nuevoPagado = !cobro.servicios[servicio].pagado;
+      const servicios = { ...cobro.servicios, [servicio]: { pagado: nuevoPagado } };
+      await actions.updateCobro(a.id, cobroId, { servicios });
+      toast(`${servicio === 'luz' ? 'Luz' : 'Impuestos'} marcado como ${nuevoPagado ? 'pagado' : 'no pagado'}`);
     });
   });
 
@@ -1188,6 +1205,7 @@ function renderMesCobro(m, a) {
         ${tipo === 'sin_cobro' ? 'Sin registrar' : ''}
         ${tipo === 'futuro'    ? 'Mes futuro' : ''}
       </div>
+      ${renderServiciosBadges(cobro)}
     </div>
 
     <!-- Monto -->
@@ -1217,6 +1235,22 @@ function renderMesCobro(m, a) {
              <span class="badge badge-neutral">Pendiente</span>
              <button class="btn btn-xs btn-ghost" data-adelanto="${key}" title="Registrar adelanto de pago desde este mes">${icon('wallet')} Adelanto</button>
            </div>`}
+  </div>`;
+}
+
+/* Chips de luz/impuestos de un mes ya cobrado (parcial o pagado). Se pueden tocar para
+   cambiar el estado en cualquier momento — por ejemplo si el inquilino pagó la luz recién
+   2 días después, así queda registrado que al final sí la pagó. */
+function renderServiciosBadges(cobro) {
+  if (!cobro?.servicios) return '';
+  const item = (key, label, obj) => obj ? `
+    <span class="badge ${obj.pagado ? 'badge-success' : 'badge-danger'}" style="cursor:pointer;font-size:.65rem"
+      data-toggle-servicio="${cobro.id}:${key}" title="Tocar para marcar como ${obj.pagado ? 'no pagado' : 'pagado'}">
+      ${label}: ${obj.pagado ? 'pagó' : 'debe'}
+    </span>` : '';
+  return `<div style="display:flex;gap:.35rem;margin-top:.3rem;flex-wrap:wrap">
+    ${item('luz', '💡 Luz', cobro.servicios.luz)}
+    ${item('impuestos', '📄 Impuestos', cobro.servicios.impuestos)}
   </div>`;
 }
 

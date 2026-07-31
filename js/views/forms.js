@@ -1170,6 +1170,34 @@ export function openCobroForm(alq, onDone, prefill = {}) {
           <div id="pagosBlk"></div>
         </div>
 
+        <!-- Servicios (luz / impuestos) del mes, para dejar constancia en el recibo -->
+        <div style="margin-bottom:1.1rem;padding:.7rem .9rem;background:var(--surface-2);border-radius:var(--r-md)">
+          <label style="display:flex;align-items:center;gap:.6rem;cursor:pointer;font-weight:600">
+            <input type="checkbox" id="chkServicios" style="width:16px;height:16px;cursor:pointer">
+            ¿Registrar pagos de servicios (luz / impuestos)?
+          </label>
+          <div id="serviciosBlk" style="display:none;margin-top:.75rem;display:flex;flex-direction:column;gap:.7rem">
+            <div>
+              <label style="display:flex;align-items:center;gap:.5rem;cursor:pointer">
+                <input type="checkbox" id="chkLuz" style="width:16px;height:16px;cursor:pointer"> Luz
+              </label>
+              <div id="luzPagoBlk" style="display:none;margin:.4rem 0 0 1.6rem;font-size:.85rem">
+                <label style="margin-right:1rem;cursor:pointer"><input type="radio" name="luzPagado" value="si" checked> Pagó luz</label>
+                <label style="cursor:pointer"><input type="radio" name="luzPagado" value="no"> No pagó luz</label>
+              </div>
+            </div>
+            <div>
+              <label style="display:flex;align-items:center;gap:.5rem;cursor:pointer">
+                <input type="checkbox" id="chkImpuestos" style="width:16px;height:16px;cursor:pointer"> Impuestos
+              </label>
+              <div id="impPagoBlk" style="display:none;margin:.4rem 0 0 1.6rem;font-size:.85rem">
+                <label style="margin-right:1rem;cursor:pointer"><input type="radio" name="impPagado" value="si" checked> Pagó impuestos</label>
+                <label style="cursor:pointer"><input type="radio" name="impPagado" value="no"> No pagó impuestos</label>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- Notas -->
         <div class="form-group">
           <label>Notas adicionales</label>
@@ -1183,6 +1211,30 @@ export function openCobroForm(alq, onDone, prefill = {}) {
       let pagos = [{ metodoPago: 'Efectivo', monto: montoSugerido || '', referencia: '' }];
       let moraActual = { dias: 0, monto: 0, pct: pctMora };
       let moraMontoManual = false;
+
+      // Servicios (luz / impuestos): tildes anidados que se muestran/ocultan en cascada,
+      // y si se está editando un cobro que ya tenía esto cargado, se precarga tal cual quedó.
+      const serviciosPrevios = cobroExistente?.servicios || null;
+      const chkServicios = ov.querySelector('#chkServicios');
+      const serviciosBlk = ov.querySelector('#serviciosBlk');
+      const chkLuz = ov.querySelector('#chkLuz');
+      const chkImpuestos = ov.querySelector('#chkImpuestos');
+      const luzPagoBlk = ov.querySelector('#luzPagoBlk');
+      const impPagoBlk = ov.querySelector('#impPagoBlk');
+      chkServicios.addEventListener('change', () => { serviciosBlk.style.display = chkServicios.checked ? 'flex' : 'none'; });
+      chkLuz.addEventListener('change', () => { luzPagoBlk.style.display = chkLuz.checked ? '' : 'none'; });
+      chkImpuestos.addEventListener('change', () => { impPagoBlk.style.display = chkImpuestos.checked ? '' : 'none'; });
+      if (serviciosPrevios) {
+        chkServicios.checked = true; serviciosBlk.style.display = 'flex';
+        if (serviciosPrevios.luz) {
+          chkLuz.checked = true; luzPagoBlk.style.display = '';
+          ov.querySelector(`input[name="luzPagado"][value="${serviciosPrevios.luz.pagado ? 'si' : 'no'}"]`).checked = true;
+        }
+        if (serviciosPrevios.impuestos) {
+          chkImpuestos.checked = true; impPagoBlk.style.display = '';
+          ov.querySelector(`input[name="impPagado"][value="${serviciosPrevios.impuestos.pagado ? 'si' : 'no'}"]`).checked = true;
+        }
+      }
 
       const blkMora = ov.querySelector('#moraBlk');
       const detalleMora = ov.querySelector('#moraDetalle');
@@ -1368,6 +1420,14 @@ export function openCobroForm(alq, onDone, prefill = {}) {
         if (blkComision.style.display !== 'none' && ov.querySelector('#chkComisionInicial').checked) {
           const montoComision = valorMonto(ov.querySelector('#comisionInicialMonto').value);
           if (montoComision > 0) cobro.comisionInicialMonto = montoComision;
+        }
+
+        // Servicios (luz / impuestos): queda registrado en el cobro y se refleja en el recibo.
+        if (chkServicios.checked) {
+          const servicios = {};
+          if (chkLuz.checked) servicios.luz = { pagado: ov.querySelector('input[name="luzPagado"]:checked').value === 'si' };
+          if (chkImpuestos.checked) servicios.impuestos = { pagado: ov.querySelector('input[name="impPagado"]:checked').value === 'si' };
+          if (Object.keys(servicios).length) cobro.servicios = servicios;
         }
 
         // Un mes con saldo pendiente de una vez anterior (pagado:true, saldoPendiente>0) necesita
