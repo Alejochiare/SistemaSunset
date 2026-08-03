@@ -10,7 +10,8 @@ import { esc, fmtMoneda, fmtFechaCorta, debounce, waLink } from '../lib.js';
 import { navegar } from '../router.js';
 import { openModal } from '../components/modal.js';
 import { toast } from '../components/toast.js';
-import { imprimirInformeCaptacion } from '../imprimir.js';
+import { imprimirInformeCaptacion, generarPDFInformeCaptacion } from '../imprimir.js';
+import { compartirArchivoPorWhatsApp } from '../lib.js';
 import { openPropForm } from './forms.js';
 import {
   openDocumentoForm, openComercializacionForm,
@@ -604,23 +605,36 @@ function pintarPropiedadVentaDetalle(el, id) {
   });
 
   // Informes
-  el.querySelector('#btnGenerarInforme')?.addEventListener('click', async () => {
+  const periodoInforme = () => {
     const hasta = new Date().toISOString().slice(0, 10);
     const dias = p.frecuenciaInformeDias ? Number(p.frecuenciaInformeDias) : 30;
     const ultimoInforme = (p.informes || [])[0];
     const desde = ultimoInforme
       ? (ultimoInforme.periodoHasta || ultimoInforme.fecha || hasta).slice(0, 10)
       : new Date(Date.now() - dias * 86400000).toISOString().slice(0, 10);
+    return { desde, hasta };
+  };
+
+  el.querySelector('#btnGenerarInforme')?.addEventListener('click', async () => {
+    const { desde, hasta } = periodoInforme();
     const stats = computarStatsInforme(p, desde, hasta);
     imprimirInformeCaptacion({ captacion: p, periodoDesde: desde, periodoHasta: hasta, stats });
     await actions.addInformePropiedad(id, { periodoDesde: desde, periodoHasta: hasta, indiceScore: stats.indice.score });
     toast('Informe generado');
   });
-  el.querySelector('#btnCompartirWA')?.addEventListener('click', () => {
+  el.querySelector('#btnCompartirWA')?.addEventListener('click', async () => {
     const tel = propietario?.telefono;
     if (!tel) { toast('Cargá el teléfono del propietario para compartir por WhatsApp', { tipo: 'warning' }); return; }
     const texto = `Hola${propietario.nombre ? ' ' + propietario.nombre : ''}, te comparto el estado de comercialización de ${p.direccion}. Índice de vendibilidad actual: ${indice.score}/100.`;
-    window.open(waLink(tel, texto), '_blank');
+    try {
+      const { desde, hasta } = periodoInforme();
+      const stats = computarStatsInforme(p, desde, hasta);
+      const blob = await generarPDFInformeCaptacion({ captacion: p, periodoDesde: desde, periodoHasta: hasta, stats });
+      await compartirArchivoPorWhatsApp({ numero: tel, texto, archivo: blob, nombreArchivo: `informe-${p.direccion || 'propiedad'}.pdf` });
+    } catch (err) {
+      console.error(err);
+      toast('No se pudo generar el PDF para compartir por WhatsApp', { tipo: 'danger' });
+    }
   });
 }
 

@@ -136,6 +136,41 @@ export function waLink(numero, texto = '') {
   return `https://wa.me/${n}${texto ? `?text=${encodeURIComponent(texto)}` : ''}`;
 }
 
+export async function compartirArchivoPorWhatsApp({ numero, texto = '', archivo, nombreArchivo = 'documento.pdf', tipo = 'application/pdf' }) {
+  if (!archivo) return false;
+
+  const file = archivo instanceof File ? archivo : new File([archivo], nombreArchivo, { type: tipo });
+  const mensaje = texto || 'Te comparto el documento.';
+
+  try {
+    if (typeof navigator !== 'undefined' && navigator.share) {
+      if (navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ files: [file], text: mensaje, title: 'Documento compartido' });
+        return true;
+      }
+    }
+  } catch (err) {
+    console.warn('No se pudo compartir por Web Share API:', err);
+  }
+
+  const link = waLink(numero, mensaje);
+  if (link) {
+    // En escritorio: descargamos el archivo y abrimos el chat con el texto como respaldo.
+    try {
+      // Forzar descarga inmediata (crea link temporario)
+      descargar(archivo, nombreArchivo, tipo);
+    } catch (e) {
+      console.warn('No se pudo descargar el archivo automáticamente:', e);
+    }
+    window.open(link, '_blank', 'noopener,noreferrer');
+    return false;
+  }
+
+  // Si todo lo demás falló, forzar descarga
+  descargar(archivo, nombreArchivo, tipo);
+  return false;
+}
+
 export function descargar(contenido, nombre, tipo = 'text/plain') {
   const blob = (contenido instanceof Blob) ? contenido : new Blob([contenido], { type: tipo });
   const url = URL.createObjectURL(blob);

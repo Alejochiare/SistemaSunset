@@ -3,10 +3,10 @@
    ============================================================ */
 import { getState, actions, subscribe } from '../store.js';
 import { icon } from '../config.js';
-import { esc, fmtMontoInput, valorMonto } from '../lib.js';
+import { esc, fmtMontoInput, valorMonto, compartirArchivoPorWhatsApp } from '../lib.js';
 import { openModal } from '../components/modal.js';
 import { toast } from '../components/toast.js';
-import { imprimirLiquidacion, imprimirLiquidacionTemporal } from '../imprimir.js';
+import { imprimirLiquidacion, generarPDFLiquidacion, imprimirLiquidacionTemporal, generarPDFLiquidacionTemporal } from '../imprimir.js';
 import { cuentaLabel, noches } from './temporales.js';
 
 function fmtFecha(s) {
@@ -339,6 +339,8 @@ export default function liquidaciones(root) {
       }
       return;
     }
+    const waTemp = e.target.closest('[data-wa-liqt]');
+    if (waTemp) { enviarWALiqTemp(waTemp.dataset.waLiqt); return; }
     const delTemp = e.target.closest('[data-eliminar-liqt]');
     if (delTemp) {
       if (confirm('¿Eliminar esta liquidación? Los cobros que incluía volverán a aparecer como pendientes de liquidar.')) {
@@ -354,6 +356,7 @@ export default function liquidaciones(root) {
     const id = card.dataset.liqId;
 
     if (e.target.closest('[data-pdf]'))      { generarPDF(id); return; }
+    if (e.target.closest('[data-wa]'))       { enviarWA(id); return; }
     if (e.target.closest('[data-eliminar]')) {
       if (confirm('¿Eliminar esta liquidación?')) {
         await actions.deleteLiquidacion(id);
@@ -503,6 +506,7 @@ function pintarLiquidacionesTemporales(el) {
             </div>
             <div style="display:flex;gap:.3rem;flex-shrink:0">
               <button class="btn btn-sm btn-ghost" data-pdf-liqt="${l.id}">${icon('file')} PDF</button>
+              <button class="btn btn-sm btn-ghost" style="color:var(--success)" data-wa-liqt="${l.id}" title="Enviar por WhatsApp">${icon('whatsapp')}</button>
               <button class="btn btn-xs btn-ghost" style="color:var(--danger)" data-eliminar-liqt="${l.id}">${icon('trash')}</button>
             </div>
           </div>
@@ -616,6 +620,7 @@ function renderHistorial(historial) {
             </div>
             <div style="display:flex;flex-direction:column;gap:.3rem;flex-shrink:0">
               <button class="btn btn-sm btn-ghost" data-pdf="${l.id}">${icon('file')} PDF</button>
+              <button class="btn btn-sm btn-ghost" style="color:var(--success)" data-wa="${l.id}" title="Enviar por WhatsApp">${icon('whatsapp')}</button>
               <button class="btn btn-xs btn-ghost" style="color:var(--danger)" data-eliminar="${l.id}">${icon('trash')}</button>
             </div>
           </div>
@@ -646,12 +651,12 @@ function detalleDeLiquidacion(l, state) {
   return detalle.length ? detalle : null;
 }
 
-/* ── Generar PDF ── */
-function generarPDF(id) {
+/* Arma los params de imprimirLiquidacion/generarPDFLiquidacion para una liquidación ya guardada. */
+function paramsLiquidacionGuardada(id) {
   const state = getState();
   const { liquidaciones: list, alquileres, clientes, propietarios, propiedades } = state;
   const l    = (list || []).find(x => x.id === id);
-  if (!l) return;
+  if (!l) return null;
   const alq  = alquileres.find(a => a.id === l.alquilerId) || {};
   const inq  = clientes.find(c => c.id === alq.inquilinoId) || {};
   const prop = propiedades.find(p => p.id === (l.propiedadId || alq.propiedadId)) || {};
@@ -661,9 +666,52 @@ function generarPDF(id) {
     ? `${mesLabel(l.meses[0])} – ${mesLabel(l.meses[l.meses.length - 1])}`
     : null;
   const detalle = detalleDeLiquidacion(l, state);
-  imprimirLiquidacion({ alq, cobro: cobroSint, inquilino: inq, propiedad: prop, propietario: own,
-    pctHonorarios: l.pctHonorarios || 0, descuentos: l.descuentos || [], formaPago: l.formaPago || 'Efectivo',
-    pagos: l.pagos || [], periodoLabel, detalle });
+  return {
+    params: { alq, cobro: cobroSint, inquilino: inq, propiedad: prop, propietario: own,
+      pctHonorarios: l.pctHonorarios || 0, descuentos: l.descuentos || [], formaPago: l.formaPago || 'Efectivo',
+      pagos: l.pagos || [], periodoLabel, detalle },
+    own, prop,
+  };
+}
+
+/* ── Generar PDF ── */
+function generarPDF(id) {
+  const datos = paramsLiquidacionGuardada(id);
+  if (datos) imprimirLiquidacion(datos.params);
+}
+
+/* ── Enviar por WhatsApp ── */
+async function enviarWA(id) {
+  const datos = paramsLiquidacionGuardada(id);
+  if (!datos) return;
+  const tel = datos.own?.telefono;
+  if (!tel) { toast('Cargá el teléfono del propietario para enviar por WhatsApp', { tipo: 'warning' }); return; }
+  const texto = `Hola${datos.own?.nombre ? ' ' + datos.own.nombre : ''}! Te comparto la liquidación de ${datos.prop?.direccion || 'tu propiedad'}.`;
+  try {
+    const blob = await generarPDFLiquidacion(datos.params, 'liquidacion.pdf');
+    await compartirArchivoPorWhatsApp({ numero: tel, texto, archivo: blob, nombreArchivo: 'liquidacion.pdf' });
+  } catch (err) {
+    console.error('Error generando o compartiendo la liquidación:', err);
+    toast('No se pudo generar el PDF para compartir por WhatsApp', { tipo: 'danger' });
+  }
+}
+
+/* ── Enviar liquidación temporal (historial) por WhatsApp ── */
+async function enviarWALiqTemp(id) {
+  const l = (getState().liquidacionesTemporales || []).find(x => x.id === id);
+  if (!l) return;
+  const propiedadesLiq = getState().propiedades.filter(p => (l.propiedadesIds || []).includes(p.id));
+  const propietario = getState().propietarios.find(p => p.id === l.propietarioId);
+  const tel = propietario?.telefono;
+  if (!tel) { toast('Cargá el teléfono del propietario para enviar por WhatsApp', { tipo: 'warning' }); return; }
+  const texto = `Hola${propietario?.nombre ? ' ' + propietario.nombre : ''}! Te comparto la liquidación mensual de tus propiedades de alquiler temporario.`;
+  try {
+    const blob = await generarPDFLiquidacionTemporal({ liquidacion: l, propiedades: propiedadesLiq, propietario }, 'liquidacion-temporal.pdf');
+    await compartirArchivoPorWhatsApp({ numero: tel, texto, archivo: blob, nombreArchivo: 'liquidacion-temporal.pdf' });
+  } catch (err) {
+    console.error('Error generando o compartiendo la liquidación temporal:', err);
+    toast('No se pudo generar el PDF para compartir por WhatsApp', { tipo: 'danger' });
+  }
 }
 
 /* ── Formulario liquidar GRUPAL (múltiples propiedades de un propietario) ── */
@@ -752,6 +800,7 @@ export function abrirFormLiquidacionGrupal(grupo, onDone) {
       </form>`,
     footerHTML: `<button class="btn btn-ghost" data-close>Cancelar</button>
                  <button class="btn btn-ghost" id="btnSoloGuardar">Guardar sin PDF</button>
+                 ${own.telefono ? `<button class="btn btn-ghost" id="btnGuardarWA" style="color:var(--success)">${icon('whatsapp')} Guardar y enviar por WhatsApp</button>` : ''}
                  <button class="btn btn-primary" id="btnGuardarPDF">Guardar y generar PDF</button>`,
     onMount(ctx) {
       const q = (sel) => ctx.overlay.querySelector(sel);
@@ -771,10 +820,16 @@ export function abrirFormLiquidacionGrupal(grupo, onDone) {
       const renderDescs = () => {
         const block = q('#descBlk');
         block.innerHTML = (q('#liqForm') || q('#liqGrupalForm')).descuentos?.map((d, i) => `
-          <div style="display:flex;gap:.5rem;align-items:flex-end;margin-bottom:.5rem">
-            <input type="text" placeholder="Concepto" value="${esc(d.concepto || '')}" data-desc-concepto="${i}" style="flex:1">
-            <input type="text" inputmode="numeric" class="input-monto" placeholder="Monto" value="${fmtMontoInput(d.monto)}" data-desc-monto="${i}" style="width:100px">
-            <button type="button" data-del-desc="${i}" class="btn btn-xs btn-ghost" style="color:var(--danger)">${icon('trash')}</button>
+          <div style="display:flex;gap:.6rem;align-items:flex-end;margin-bottom:.6rem">
+            <div class="form-group" style="flex:2;margin:0">
+              <label style="font-size:.72rem">Concepto</label>
+              <input type="text" placeholder="Ej. Reparación, gasto..." value="${esc(d.concepto || '')}" data-desc-concepto="${i}">
+            </div>
+            <div class="form-group" style="flex:1;margin:0;max-width:130px">
+              <label style="font-size:.72rem">Monto $</label>
+              <input type="text" inputmode="numeric" class="input-monto" placeholder="0" value="${fmtMontoInput(d.monto)}" data-desc-monto="${i}">
+            </div>
+            <button type="button" data-del-desc="${i}" class="btn btn-xs btn-ghost" style="color:var(--danger);flex-shrink:0;height:42px" title="Eliminar descuento">${icon('trash')}</button>
           </div>`).join('') || '';
         block.querySelectorAll('[data-desc-monto]').forEach(el => {
           el.addEventListener('input', () => {
@@ -782,6 +837,13 @@ export function abrirFormLiquidacionGrupal(grupo, onDone) {
             const form = q('#liqForm') || q('#liqGrupalForm');
             if (form.descuentos?.[idx]) form.descuentos[idx].monto = valorMonto(el.value);
             recalcular();
+          });
+        });
+        block.querySelectorAll('[data-desc-concepto]').forEach(el => {
+          el.addEventListener('input', () => {
+            const idx = Number(el.dataset.descConcepto);
+            const form = q('#liqForm') || q('#liqGrupalForm');
+            if (form.descuentos?.[idx]) form.descuentos[idx].concepto = el.value;
           });
         });
       };
@@ -808,7 +870,7 @@ export function abrirFormLiquidacionGrupal(grupo, onDone) {
         }
       });
 
-      const guardar = async (conPDF) => {
+      const guardar = async (modo) => {
         const form = q('#liqGrupalForm');
         const totalPagar = valorMonto(q('#liqTotal').value);
 
@@ -839,9 +901,8 @@ export function abrirFormLiquidacionGrupal(grupo, onDone) {
 
         const liq = await actions.createLiquidacion(data);
 
-        if (conPDF && liq) {
-          // Se llama de forma síncrona respecto al click para evitar que el navegador bloquee el pop-up
-          imprimirLiquidacion({
+        if (modo !== 'none' && liq) {
+          const paramsLiq = {
             alq: {},
             cobro: { monto: liq.montoAlquiler, mes: liq.mes, fechaPago: liq.fechaPago },
             inquilino: {},
@@ -857,7 +918,20 @@ export function abrirFormLiquidacionGrupal(grupo, onDone) {
               periodo: d.periodos.map(p => mesLabel(p.mes)).join(', '),
               monto: d.total,
             })),
-          });
+          };
+          if (modo === 'pdf') {
+            // Se llama de forma síncrona respecto al click para evitar que el navegador bloquee el pop-up
+            imprimirLiquidacion(paramsLiq);
+          } else if (modo === 'wa') {
+            try {
+              const texto = `Hola${own?.nombre ? ' ' + own.nombre : ''}! Te comparto la liquidación de ${mesesLabelStr}.`;
+              const blob = await generarPDFLiquidacion(paramsLiq, 'liquidacion.pdf');
+              await compartirArchivoPorWhatsApp({ numero: own.telefono, texto, archivo: blob, nombreArchivo: 'liquidacion.pdf' });
+            } catch (err) {
+              console.error('Error generando o compartiendo la liquidación:', err);
+              toast('No se pudo generar el PDF para compartir por WhatsApp', { tipo: 'danger' });
+            }
+          }
         }
 
         toast('Liquidación registrada');
@@ -865,8 +939,9 @@ export function abrirFormLiquidacionGrupal(grupo, onDone) {
         onDone?.();
       };
 
-      q('#btnSoloGuardar').addEventListener('click', () => guardar(false));
-      q('#btnGuardarPDF').addEventListener('click', () => guardar(true));
+      q('#btnSoloGuardar').addEventListener('click', () => guardar('none'));
+      q('#btnGuardarPDF').addEventListener('click', () => guardar('pdf'));
+      q('#btnGuardarWA')?.addEventListener('click', () => guardar('wa'));
 
       recalcular();
       renderDescs();
@@ -942,6 +1017,7 @@ export function abrirFormLiquidacion(pre, onDone) {
       </form>`,
     footerHTML: `<button class="btn btn-ghost" data-close>Cancelar</button>
                  <button class="btn btn-ghost" id="btnSoloGuardar">Guardar sin PDF</button>
+                 ${own.telefono ? `<button class="btn btn-ghost" id="btnGuardarWA" style="color:var(--success)">${icon('whatsapp')} Guardar y enviar por WhatsApp</button>` : ''}
                  <button class="btn btn-primary" id="btnGuardarPDF">Guardar y generar PDF</button>`,
     onMount(ctx) {
       const q = (sel) => ctx.overlay.querySelector(sel);
@@ -983,7 +1059,7 @@ export function abrirFormLiquidacion(pre, onDone) {
 
       q('#btnAddDesc').addEventListener('click', addDescRow);
 
-      const guardar = async (conPDF) => {
+      const guardar = async (modo) => {
         const f = q('#liqForm');
         if (!f.fechaPago.value) { toast('Indicá la fecha de pago', { tipo: 'warning' }); return; }
 
@@ -1028,20 +1104,28 @@ export function abrirFormLiquidacion(pre, onDone) {
 
         const liq = await actions.createLiquidacion(data);
 
-        if (conPDF && liq) {
-          // Se llama de forma síncrona respecto al click para evitar que el navegador bloquee el pop-up
+        if (modo !== 'none' && liq) {
           const cobroSint = { monto: liq.montoAlquiler, mes: liq.mes, fechaPago: liq.fechaPago };
-          imprimirLiquidacion({
-            alq,
-            cobro: cobroSint,
-            inquilino: inq,
-            propiedad: prop,
-            propietario: own,
+          const paramsLiq = {
+            alq, cobro: cobroSint, inquilino: inq, propiedad: prop, propietario: own,
             pctHonorarios: liq.pctHonorarios || 0,
             descuentos: liq.descuentos || [],
             formaPago: liq.formaPago || 'Efectivo',
             pagos: liq.pagos || [],
-          });
+          };
+          if (modo === 'pdf') {
+            // Se llama de forma síncrona respecto al click para evitar que el navegador bloquee el pop-up
+            imprimirLiquidacion(paramsLiq);
+          } else if (modo === 'wa') {
+            try {
+              const texto = `Hola${own?.nombre ? ' ' + own.nombre : ''}! Te comparto la liquidación de ${prop?.direccion || 'la propiedad'}.`;
+              const blob = await generarPDFLiquidacion(paramsLiq, 'liquidacion.pdf');
+              await compartirArchivoPorWhatsApp({ numero: own.telefono, texto, archivo: blob, nombreArchivo: 'liquidacion.pdf' });
+            } catch (err) {
+              console.error('Error generando o compartiendo la liquidación:', err);
+              toast('No se pudo generar el PDF para compartir por WhatsApp', { tipo: 'danger' });
+            }
+          }
         }
 
         toast('Liquidación registrada');
@@ -1049,8 +1133,9 @@ export function abrirFormLiquidacion(pre, onDone) {
         onDone?.();
       };
 
-      q('#btnSoloGuardar').addEventListener('click', () => guardar(false));
-      q('#btnGuardarPDF').addEventListener('click', () => guardar(true));
+      q('#btnSoloGuardar').addEventListener('click', () => guardar('none'));
+      q('#btnGuardarPDF').addEventListener('click', () => guardar('pdf'));
+      q('#btnGuardarWA')?.addEventListener('click', () => guardar('wa'));
 
       pagosCtl = montarPagos(ctx, { getTotal: () => valorMonto(q('#liqTotal').value) });
       q('#liqTotal').addEventListener('input', () => pagosCtl?.refrescarTotal());
@@ -1099,6 +1184,7 @@ export function abrirLiquidacionTemporalModal(onDone, preselectPropietarioId) {
     footerHTML: `
       <button class="btn btn-ghost" data-close>Cancelar</button>
       <button class="btn btn-ghost" id="btnSoloGuardarLiqT">Guardar sin PDF</button>
+      <button class="btn btn-ghost" id="btnGuardarWALiqT" style="color:var(--success)">${icon('whatsapp')} Guardar y enviar por WhatsApp</button>
       <button class="btn btn-primary" id="btnGuardarPDFLiqT">Guardar y generar PDF</button>`,
     onMount(ctx) {
       const q = sel => ctx.overlay.querySelector(sel);
@@ -1284,7 +1370,7 @@ export function abrirLiquidacionTemporalModal(onDone, preselectPropietarioId) {
 
       render();
 
-      const guardar = async (conPDF) => {
+      const guardar = async (modo) => {
         const { propietarioId, mes, calc, gastosTotal, neto, teoricoDueñoNeto, teoricoGastonNeto, diffFinal } = calcularConGastos();
         if (!calc.detalle.length) { toast('No hay cobros para liquidar en ese mes', { tipo: 'warning' }); return; }
 
@@ -1312,16 +1398,32 @@ export function abrirLiquidacionTemporalModal(onDone, preselectPropietarioId) {
         };
 
         const liq = await actions.createLiquidacionTemporal(data);
-        if (conPDF && liq) {
-          imprimirLiquidacionTemporal({ liquidacion: liq, propiedades: calc.propiedades, propietario });
+        if (modo !== 'none' && liq) {
+          if (modo === 'pdf') {
+            imprimirLiquidacionTemporal({ liquidacion: liq, propiedades: calc.propiedades, propietario });
+          } else if (modo === 'wa') {
+            if (!propietario?.telefono) {
+              toast('Cargá el teléfono del dueño para enviar por WhatsApp', { tipo: 'warning' });
+            } else {
+              try {
+                const texto = `Hola${propietario?.nombre ? ' ' + propietario.nombre : ''}! Te comparto la liquidación mensual de tus propiedades de alquiler temporario.`;
+                const blob = await generarPDFLiquidacionTemporal({ liquidacion: liq, propiedades: calc.propiedades, propietario }, 'liquidacion-temporal.pdf');
+                await compartirArchivoPorWhatsApp({ numero: propietario.telefono, texto, archivo: blob, nombreArchivo: 'liquidacion-temporal.pdf' });
+              } catch (err) {
+                console.error('Error generando o compartiendo la liquidación temporal:', err);
+                toast('No se pudo generar el PDF para compartir por WhatsApp', { tipo: 'danger' });
+              }
+            }
+          }
         }
         toast('Liquidación registrada');
         ctx.close();
         onDone?.();
       };
 
-      q('#btnSoloGuardarLiqT').addEventListener('click', () => guardar(false));
-      q('#btnGuardarPDFLiqT').addEventListener('click', () => guardar(true));
+      q('#btnSoloGuardarLiqT').addEventListener('click', () => guardar('none'));
+      q('#btnGuardarPDFLiqT').addEventListener('click', () => guardar('pdf'));
+      q('#btnGuardarWALiqT').addEventListener('click', () => guardar('wa'));
     },
   });
 }

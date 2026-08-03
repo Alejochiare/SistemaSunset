@@ -3,10 +3,10 @@
    ============================================================ */
 import { getState, sel, actions, subscribe } from '../store.js';
 import { icon, ESTADOS_TAREA, PASOS_TAREA } from '../config.js';
-import { esc, fmtFechaCorta, fmtMontoInput, valorMonto, parseFechaLocal } from '../lib.js';
+import { esc, fmtFechaCorta, fmtMontoInput, valorMonto, parseFechaLocal, waLink, compartirArchivoPorWhatsApp } from '../lib.js';
 import { openModal } from '../components/modal.js';
 import { toast } from '../components/toast.js';
-import { imprimirReciboTemporal, imprimirResumenOcupacion, generarPDFInformeOcupacion } from '../imprimir.js';
+import { imprimirReciboTemporal, generarPDFReciboTemporal, imprimirResumenOcupacion, generarPDFInformeOcupacion } from '../imprimir.js';
 import { openTareaForm, openTareaDetalle } from './forms.js';
 
 const ESTADOS = [
@@ -107,7 +107,7 @@ export default function temporales(root, param) {
     if (e.target.id === 'histMes') { histMes = e.target.value; render(); return; }
   });
 
-  root.querySelector('#vTemp').addEventListener('click', e => {
+  root.querySelector('#vTemp').addEventListener('click', async e => {
     if (e.target.closest('#btnNuevoTemp')) { abrirFormTemporal(null, render); return; }
 
     const vt = e.target.closest('[data-vista-temp]');
@@ -203,6 +203,26 @@ export default function temporales(root, param) {
       const propietario = propietarios.find(p => p.id === propietarioIdActual);
       const { props, filas } = reservasDelDuenoEnMes(propietarioIdActual, mesActual);
       descargarInformeTemporal({ propietario, mes: mesActual, propiedades: props, filas });
+      return;
+    }
+
+    const btnCompartirInformeWA = e.target.closest('#btnCompartirInformeWA');
+    if (btnCompartirInformeWA) {
+      const propietarioIdActual = root.querySelector('#histPropietario')?.value || histPropietarioId;
+      const mesActual = root.querySelector('#histMes')?.value || histMes;
+      const { propietarios } = getState();
+      const propietario = propietarios.find(p => p.id === propietarioIdActual);
+      const tel = propietario?.telefono;
+      if (!tel) { toast('Cargá el teléfono del dueño para enviar por WhatsApp', { tipo: 'warning' }); return; }
+      const { props, filas } = reservasDelDuenoEnMes(propietarioIdActual, mesActual);
+      const texto = `Hola${propietario?.nombre ? ' ' + propietario.nombre : ''}! Te comparto el informe de ocupación de ${mesLabelLargo(mesActual)}.`;
+      try {
+        const blob = await generarPDFInformeOcupacion({ propietario, mes: mesActual, propiedades: props, filas });
+        await compartirArchivoPorWhatsApp({ numero: tel, texto, archivo: blob, nombreArchivo: `Informe ${mesLabelLargo(mesActual)}.pdf` });
+      } catch (err) {
+        console.warn('No se pudo generar el PDF del informe:', err);
+        toast('No se pudo generar el PDF (revisá la conexión a internet)', { tipo: 'danger' });
+      }
       return;
     }
   });
@@ -757,6 +777,7 @@ function pintarInformeTemporal(el, propietarioIdSel, mesSel) {
         </div>
         <div style="display:flex;gap:.5rem;flex-wrap:wrap">
           <button class="btn btn-ghost" id="btnImprimirInforme">${icon('file')} Imprimir / PDF</button>
+          <button class="btn btn-ghost" id="btnCompartirInformeWA" style="color:var(--success)">${icon('whatsapp')} WhatsApp</button>
           <button class="btn btn-primary" id="btnDescargarInforme">${icon('download')} Descargar PDF</button>
         </div>
       </div>
@@ -858,11 +879,23 @@ function abrirDetalleTemporal(t, onDone) {
     footerHTML: `
       <button class="btn btn-ghost" data-close>Cerrar</button>
       <button class="btn btn-ghost" id="btnImprimirRecTemp">${icon('file')} Imprimir recibo</button>
+      ${t.telefono ? `<button class="btn btn-ghost" id="btnWARecTemp" style="color:var(--success)">${icon('whatsapp')} Enviar por WhatsApp</button>` : ''}
       ${resta > 0 ? `<button class="btn btn-ghost" id="btnCobrarResto" style="color:var(--success)">💰 Cobrar resto</button>` : ''}
       <button class="btn btn-primary" id="btnEditarDesdeDetalle">${icon('edit')} Editar contrato</button>`,
     onMount(ctx) {
       ctx.overlay.querySelector('#btnImprimirRecTemp').addEventListener('click', () => {
         imprimirReciboTemporal({ temporal: t, propiedad: prop });
+      });
+      ctx.overlay.querySelector('#btnWARecTemp')?.addEventListener('click', async () => {
+        const texto = `Hola${t.huesped ? ' ' + t.huesped : ''}! Te comparto el recibo de tu alquiler temporario en ${prop?.nombreTemporal || prop?.direccion || 'la propiedad'}.`;
+        try {
+          const blob = await generarPDFReciboTemporal({ temporal: t, propiedad: prop }, 'recibo-temporario.pdf');
+          await compartirArchivoPorWhatsApp({ numero: t.telefono, texto, archivo: blob, nombreArchivo: 'recibo-temporario.pdf' });
+        } catch (err) {
+          console.error('Error generando o compartiendo el recibo temporario:', err);
+          toast('No se pudo generar el PDF para compartir por WhatsApp', { tipo: 'danger' });
+          window.open(waLink(t.telefono, texto), '_blank');
+        }
       });
       ctx.overlay.querySelector('#btnCobrarResto')?.addEventListener('click', () => {
         ctx.close();

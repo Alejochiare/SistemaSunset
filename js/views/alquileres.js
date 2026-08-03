@@ -3,12 +3,12 @@
    ============================================================ */
 import { getState, sel, actions, subscribe } from '../store.js';
 import { icon, CONTRATO_ESTADOS, ESTADOS_TAREA, PASOS_TAREA, MONEDAS, DIA_LIMITE_PAGO } from '../config.js';
-import { esc, fmtMoneda, fmtFechaCorta, garantesDeAlquiler, valorMonto, fmtMontoInput, parseFechaLocal, debounce, waLink } from '../lib.js';
+import { esc, fmtMoneda, fmtFechaCorta, garantesDeAlquiler, valorMonto, fmtMontoInput, parseFechaLocal, debounce, waLink, compartirArchivoPorWhatsApp } from '../lib.js';
 import { navegar } from '../router.js';
 import { openAlquilerForm, openCobroForm, openRenovacionForm, openTareaForm, openTareaDetalle, openAdelantoForm, openEntregaContratoForm } from './forms.js';
 import { openModal } from '../components/modal.js';
 import { toast } from '../components/toast.js';
-import { imprimirRecibo, imprimirLiquidacion, imprimirFacturaDeuda, getAgencia, setAgencia } from '../imprimir.js';
+import { imprimirRecibo, imprimirLiquidacion, imprimirFacturaDeuda, generarPDFFacturaDeuda, getAgencia, setAgencia, generarPDFRecibo } from '../imprimir.js';
 import { abrirFormLiquidacion } from './liquidaciones.js';
 import { getUltimoIndice, calcularVariacionICL, calcularVariacionIPC } from '../indices.js';
 
@@ -665,13 +665,21 @@ function pintarDetalle(el, id) {
     });
   });
   el.querySelectorAll('[data-wa-rec]').forEach(btn => {
-    btn.addEventListener('click', (e) => {
+    btn.addEventListener('click', async (e) => {
       e.stopPropagation();
       const cobro = (a.cobros || []).find(c => c.mes === btn.dataset.waRec);
       if (!cobro) return;
       const tel = a.inquilinoTelefono || inq?.telefono;
       if (!tel) { toast('Cargá el teléfono del inquilino para enviar por WhatsApp', { tipo: 'warning' }); return; }
-      window.open(waLink(tel, textoReciboWA(a, cobro, prop)), '_blank');
+      const texto = textoReciboWA(a, cobro, prop);
+      try {
+        const blob = await generarPDFRecibo({ ...datosImpresion(), cobro }, `recibo-${cobro.mes || 'documento'}.pdf`);
+        await compartirArchivoPorWhatsApp({ numero: tel, texto, archivo: blob, nombreArchivo: `recibo-${cobro.mes || 'documento'}.pdf` });
+      } catch (err) {
+        console.error('Error generando o compartiendo PDF:', err);
+        // Fallback: abrir chat con texto si no se pudo adjuntar
+        window.open(waLink(tel, texto), '_blank');
+      }
     });
   });
 
@@ -867,6 +875,7 @@ function abrirCancelacionModal(a) {
         El cargo adicional se registra como ingreso en la caja del día.
       </p>`,
     footerHTML: `<button class="btn btn-ghost" data-close>Volver</button>
+                 ${cobrosPend.length || inq?.telefono ? `<button class="btn btn-ghost" id="btnCancelacionWA" style="color:var(--success)">${icon('whatsapp')} Cancelar y enviar por WhatsApp</button>` : ''}
                  <button class="btn" id="btnConfirmarCancelacion" style="background:var(--danger);color:#fff">Cancelar contrato</button>`,
     onMount(ctx) {
       const mostrarRef = (m) => ['transferencia', 'cheque'].includes(m);
@@ -876,34 +885,40 @@ function abrirCancelacionModal(a) {
       metodoSel.addEventListener('change', actualizarRef);
       actualizarRef();
 
+      /* Ejecuta la cancelación (registra el cargo adicional si hay) y arma los ítems
+         de la factura de deuda; devuelve null si falla. */
+      async function ejecutarCancelacion() {
+        const conceptoMulta = ctx.overlay.querySelector('#cancConcepto').value.trim() || 'Multa por rescisión anticipada';
+        const montoMulta = valorMonto(ctx.overlay.querySelector('#cancMonto').value);
+        const monedaMulta = ctx.overlay.querySelector('#cancMoneda').value;
+        const metodoPagoMulta = metodoSel.value;
+        const referenciaMulta = ctx.overlay.querySelector('#cancReferencia').value.trim();
+
+        await actions.cancelarAlquiler(a.id);
+
+        if (montoMulta > 0) {
+          const diaHoy = await actions.cajaHoy();
+          await actions.addMovimiento(diaHoy.id, {
+            tipo: 'ingreso',
+            concepto: `${conceptoMulta} (${monedaMulta}) • ${inq?.nombre || 'Inquilino'} • ${prop?.direccion || 'Propiedad'}`,
+            monto: montoMulta,
+            metodoPago: metodoPagoMulta,
+            nota: [referenciaMulta, 'Cancelación de contrato'].filter(Boolean).join(' · '),
+            origen: 'cancelacion-contrato',
+            refTipo: 'alquiler',
+            refId: a.id,
+            moneda: monedaMulta,
+          });
+        }
+
+        const itemsFactura = cobrosPend.map(c => ({ ...c, moneda: a.moneda || 'ARS' }));
+        if (montoMulta > 0) itemsFactura.push({ concepto: conceptoMulta, monto: montoMulta, moneda: monedaMulta });
+        return itemsFactura;
+      }
+
       ctx.overlay.querySelector('#btnConfirmarCancelacion').addEventListener('click', async () => {
         try {
-          const conceptoMulta = ctx.overlay.querySelector('#cancConcepto').value.trim() || 'Multa por rescisión anticipada';
-          const montoMulta = valorMonto(ctx.overlay.querySelector('#cancMonto').value);
-          const monedaMulta = ctx.overlay.querySelector('#cancMoneda').value;
-          const metodoPagoMulta = metodoSel.value;
-          const referenciaMulta = ctx.overlay.querySelector('#cancReferencia').value.trim();
-
-          await actions.cancelarAlquiler(a.id);
-
-          if (montoMulta > 0) {
-            const diaHoy = await actions.cajaHoy();
-            await actions.addMovimiento(diaHoy.id, {
-              tipo: 'ingreso',
-              concepto: `${conceptoMulta} (${monedaMulta}) • ${inq?.nombre || 'Inquilino'} • ${prop?.direccion || 'Propiedad'}`,
-              monto: montoMulta,
-              metodoPago: metodoPagoMulta,
-              nota: [referenciaMulta, 'Cancelación de contrato'].filter(Boolean).join(' · '),
-              origen: 'cancelacion-contrato',
-              refTipo: 'alquiler',
-              refId: a.id,
-              moneda: monedaMulta,
-            });
-          }
-
-          const itemsFactura = cobrosPend.map(c => ({ ...c, moneda: a.moneda || 'ARS' }));
-          if (montoMulta > 0) itemsFactura.push({ concepto: conceptoMulta, monto: montoMulta, moneda: monedaMulta });
-
+          const itemsFactura = await ejecutarCancelacion();
           if (itemsFactura.length) {
             imprimirFacturaDeuda({ alq: a, inquilino: inq, propiedad: prop, propietario: own, cobrosPendientes: itemsFactura });
             toast('Contrato cancelado — se generó el comprobante');
@@ -911,6 +926,22 @@ function abrirCancelacionModal(a) {
             toast('Contrato cancelado — la propiedad quedó disponible');
           }
           ctx.close();
+        } catch (err) {
+          console.error(err);
+          toast(`Error al cancelar el contrato: ${err.message || err}`, { tipo: 'danger' });
+        }
+      });
+
+      ctx.overlay.querySelector('#btnCancelacionWA')?.addEventListener('click', async () => {
+        const tel = inq?.telefono;
+        if (!tel) { toast('Cargá el teléfono del inquilino para enviar por WhatsApp', { tipo: 'warning' }); return; }
+        try {
+          const itemsFactura = await ejecutarCancelacion();
+          ctx.close();
+          if (!itemsFactura.length) { toast('Contrato cancelado — no había deuda para enviar'); return; }
+          const texto = `Hola${inq?.nombre ? ' ' + inq.nombre : ''}! Te comparto el detalle de deuda pendiente al cancelar el contrato de ${prop?.direccion || 'la propiedad'}.`;
+          const blob = await generarPDFFacturaDeuda({ alq: a, inquilino: inq, propiedad: prop, propietario: own, cobrosPendientes: itemsFactura }, 'deuda.pdf');
+          await compartirArchivoPorWhatsApp({ numero: tel, texto, archivo: blob, nombreArchivo: 'deuda.pdf' });
         } catch (err) {
           console.error(err);
           toast(`Error al cancelar el contrato: ${err.message || err}`, { tipo: 'danger' });
