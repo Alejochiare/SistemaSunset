@@ -146,6 +146,46 @@ function procesarComisionInicial(db, a, c) {
   a.comisionInicialCobrada = true;
 }
 
+/** Si el cobro trae una cuota de honorarios profesionales pendiente de cobrar y ya
+ *  está pagado, genera el ingreso de caja correspondiente y suma una cuota cobrada
+ *  al contrato (para llevar la cuenta de cuántas de las N cuotas pactadas ya entraron). */
+function procesarHonorariosProfesionales(db, a, c) {
+  if (!c.pagado || !(Number(c.honorariosMonto) > 0) || c.honorariosCajaMovimientoId) return;
+  const inq  = db.clientes.find(x => x.id === a.inquilinoId) || {};
+  const prop = db.propiedades.find(x => x.id === a.propiedadId) || {};
+  const cuotaNro = (Number(a.honorariosCobradas) || 0) + 1;
+  const mov = crearMovimientoCaja(db, {
+    tipo: 'ingreso',
+    concepto: `Honorarios profesionales (cuota ${cuotaNro}/${a.honorariosMeses}) • ${inq.nombre || 'Inquilino'} • ${prop.direccion || 'Propiedad'}`.trim(),
+    monto: Number(c.honorariosMonto),
+    metodoPago: c.metodoPago,
+    fecha: fechaCajaDeCobro(c),
+    origen: 'honorarios-profesionales',
+    refTipo: 'honorarios-profesionales',
+    refId: c.id,
+  });
+  c.honorariosCajaMovimientoId = mov.id;
+  a.honorariosCobradas = cuotaNro;
+}
+
+/** Deja registrado, dentro del cobro del mes, cada abono por separado (cuánto se pagó y
+ *  cuándo), para poder reconstruir el historial completo de un mes pagado en varias partes
+ *  (ej.: 1er pago $200.000, 2do pago $300.000) aunque el cobro en sí solo guarde el total. */
+function registrarAbonoEnHistorial(c, { monto, montoAlquiler, metodoPago, pagos, fecha }) {
+  if (!(Number(monto) > 0)) return;
+  c.abonos = c.abonos || [];
+  c.abonos.push({
+    id: uid('abn'),
+    numero: c.abonos.length + 1,
+    fecha: fecha || hoyISO(),
+    fechaRegistro: new Date().toISOString(),
+    monto: Number(monto),
+    montoAlquiler: Number(montoAlquiler ?? monto),
+    metodoPago,
+    pagos: pagos || null,
+  });
+}
+
 let _db = load();
 
 /* ============================================================
@@ -378,8 +418,16 @@ export const api = {
       });
       c.cajaMovimientoIds = movs.map(m => m.id);
       c.cajaMovimientoId = movs[0]?.id;
+      registrarAbonoEnHistorial(c, {
+        monto: c.montoAbono ?? c.monto,
+        montoAlquiler: c.montoAlquilerAbono ?? c.montoAlquiler,
+        metodoPago: c.metodoPago,
+        pagos: c.pagos,
+        fecha: fechaCajaDeCobro(c),
+      });
     }
     procesarComisionInicial(_db, a, c);
+    procesarHonorariosProfesionales(_db, a, c);
     persist(_db);
     return delay(structuredClone(c));
   },
@@ -408,8 +456,16 @@ export const api = {
         });
         c.cajaMovimientoIds = movs.map(m => m.id);
         c.cajaMovimientoId = movs[0]?.id;
+        registrarAbonoEnHistorial(c, {
+          monto: c.montoAbono ?? c.monto,
+          montoAlquiler: c.montoAlquilerAbono ?? c.montoAlquiler,
+          metodoPago: c.metodoPago,
+          pagos: c.pagos,
+          fecha: fechaCajaDeCobro(c),
+        });
       }
       procesarComisionInicial(_db, a, c);
+      procesarHonorariosProfesionales(_db, a, c);
       persist(_db);
     }
     return delay(c ? structuredClone(c) : null);
@@ -442,8 +498,16 @@ export const api = {
         });
         c.cajaMovimientoIds = [...(c.cajaMovimientoIds || []), ...movs.map(m => m.id)];
         c.cajaMovimientoId = c.cajaMovimientoId || movs[0]?.id;
+        registrarAbonoEnHistorial(c, {
+          monto: patch.montoAbono ?? patch.monto,
+          montoAlquiler: patch.montoAlquilerAbono ?? patch.montoAlquiler,
+          metodoPago: patch.metodoPago,
+          pagos: patch.pagos,
+          fecha: fechaCajaDeCobro(patch),
+        });
       }
       procesarComisionInicial(_db, a, c);
+      procesarHonorariosProfesionales(_db, a, c);
       persist(_db);
     }
     return delay(c ? structuredClone(c) : null);
@@ -457,7 +521,7 @@ export const api = {
     const idx = (a.cobros || []).findIndex(x => x.id === cobroId);
     if (idx === -1) return delay(null);
     const c = a.cobros[idx];
-    const idsAEliminar = [...(c.cajaMovimientoIds || []), c.comisionInicialCajaMovimientoId].filter(Boolean);
+    const idsAEliminar = [...(c.cajaMovimientoIds || []), c.comisionInicialCajaMovimientoId, c.honorariosCajaMovimientoId].filter(Boolean);
     if (idsAEliminar.length) {
       (_db.caja || []).forEach(dia => {
         dia.movimientos = (dia.movimientos || []).filter(m => !idsAEliminar.includes(m.id));
@@ -465,6 +529,9 @@ export const api = {
     }
     if (c.comisionInicialCajaMovimientoId) {
       a.comisionInicialCobrada = false;
+    }
+    if (c.honorariosCajaMovimientoId) {
+      a.honorariosCobradas = Math.max(0, (Number(a.honorariosCobradas) || 0) - 1);
     }
     a.cobros.splice(idx, 1);
     persist(_db);

@@ -187,7 +187,8 @@ export const DIA_LIMITE_PAGO = 10;
 export const NAV = [
   { section: 'Principal' },
   { id: 'inicio',        label: 'Inicio',                icon: 'grid' },
-  { id: 'clientes',      label: 'Inquilinos',   icon: 'users' },
+  { id: 'clientes',      label: 'Clientes',     icon: 'users' },
+  { id: 'inquilinos',    label: 'Inquilinos',   icon: 'key' },
   { id: 'propietarios',  label: 'Propietarios', icon: 'briefcase' },
   { id: 'propiedades',   label: 'Propiedades',             icon: 'home' },
   { section: 'Operaciones' },

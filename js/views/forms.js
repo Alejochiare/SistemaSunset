@@ -866,6 +866,15 @@ export function openAlquilerForm(alq = null, onDone, formOpts = {}) {
             </select></div>
         </div>
 
+        <h3 class="form-section-title" style="margin-top:1.25rem">Honorarios profesionales</h3>
+        <div class="form-grid">
+          <div class="form-group"><label>Monto de honorarios</label>
+            <input name="honorariosMonto" type="text" inputmode="numeric" class="input-monto" id="honorariosMonto" value="${fmtMontoInput(alq.honorariosMonto)}" placeholder="Ej: 300.000"></div>
+          <div class="form-group"><label>Dividir en (meses)</label>
+            <input name="honorariosMeses" type="number" min="1" step="1" id="honorariosMeses" value="${alq.honorariosMeses || 1}"></div>
+          <div class="form-group full" id="honorariosCuotaHint" style="align-self:center;font-size:.82rem;color:var(--text-soft)"></div>
+        </div>
+
         <h3 class="form-section-title" style="margin-top:1.25rem">Garantes</h3>
         <div id="garantesBlk" style="margin-bottom:.5rem"></div>
         <button type="button" id="btnAddGarante" class="btn btn-sm btn-ghost" style="margin-bottom:1.25rem">${icon('plus')} Agregar garante</button>
@@ -956,6 +965,19 @@ export function openAlquilerForm(alq = null, onDone, formOpts = {}) {
       fAlq.fechaInicio.addEventListener('change', recalcFechaFin);
       fAlq.duracionMeses.addEventListener('input', recalcFechaFin);
 
+      // Muestra a cuánto equivale cada cuota de honorarios si se dividen en varios meses
+      const hint = ctx.overlay.querySelector('#honorariosCuotaHint');
+      const actualizarHintHonorarios = () => {
+        const monto = valorMonto(ctx.overlay.querySelector('#honorariosMonto').value);
+        const meses = Number(ctx.overlay.querySelector('#honorariosMeses').value) || 1;
+        hint.textContent = (monto > 0 && meses > 1)
+          ? `Se van a cobrar ${meses} cuotas de ${fmtMontoInput(Math.round(monto / meses))} junto con los próximos cobros de alquiler`
+          : '';
+      };
+      ctx.overlay.querySelector('#honorariosMonto').addEventListener('input', actualizarHintHonorarios);
+      ctx.overlay.querySelector('#honorariosMeses').addEventListener('input', actualizarHintHonorarios);
+      actualizarHintHonorarios();
+
       const garantesCtl = montarGarantes(ctx, garantesDeAlquiler(alq));
 
       $('#saveAlq', ctx.overlay).addEventListener('click', async () => {
@@ -977,6 +999,12 @@ export function openAlquilerForm(alq = null, onDone, formOpts = {}) {
         // Usar comision también como pctHonorarios para liquidaciones
         if (data.comision != null) data.pctHonorarios = data.comision;
         data.comisionInicial = data.comisionInicial === 'si';
+        data.honorariosMonto = data.honorariosMonto ? valorMonto(data.honorariosMonto) : null;
+        data.honorariosMeses = data.honorariosMonto ? (Number(data.honorariosMeses) || 1) : null;
+        // Si se cambió el monto/meses de honorarios respecto al contrato original, reiniciar el conteo de cuotas ya cobradas
+        if (ed && (data.honorariosMonto !== alq.honorariosMonto || data.honorariosMeses !== alq.honorariosMeses)) {
+          data.honorariosCobradas = 0;
+        }
         data.frecuenciaAjuste = Number(data.frecuenciaAjuste);
         data.garantes = garantesCtl.getGarantes();
         ['inquilinoDni','inquilinoTelefono','inquilinoDomicilio','fechaFirma']
@@ -1073,6 +1101,9 @@ export function openRenovacionForm(alqViejo, onDone) {
     fechaFirma: '',
     montoInicial: alqViejo.montoActual ?? alqViejo.montoInicial,
     comisionInicial: false,
+    honorariosMonto: null,
+    honorariosMeses: null,
+    honorariosCobradas: 0,
   };
   openAlquilerForm(prefill, onDone, { renovarDeId: alqViejo.id });
 }
@@ -1161,6 +1192,20 @@ export function openCobroForm(alq, onDone, prefill = {}) {
           <div style="display:flex;align-items:center;gap:.6rem">
             <input type="checkbox" id="chkComisionInicial" checked style="width:16px;height:16px;cursor:pointer">
             <label for="chkComisionInicial" style="margin:0;cursor:pointer;font-weight:600">Cobrar comisión junto con esta cuota</label>
+          </div>
+        </div>
+
+        <!-- Honorarios profesionales (si el contrato tiene un monto pendiente de dividir en cuotas) -->
+        <div id="honorariosBlk" style="display:none;margin-bottom:1.1rem;padding:.9rem 1rem;border-radius:var(--r-md);background:color-mix(in srgb,var(--warning) 10%,transparent);border:1px solid var(--warning)">
+          <div style="font-weight:700;margin-bottom:.3rem">💼 Honorarios profesionales</div>
+          <div style="font-size:.82rem;color:var(--text-soft);margin-bottom:.6rem" id="honorariosDetalle"></div>
+          <div class="form-grid" style="margin-bottom:.5rem">
+            <div class="form-group"><label>Monto de la cuota $</label>
+              <input type="text" inputmode="numeric" class="input-monto" id="honorariosCuotaMonto"></div>
+          </div>
+          <div style="display:flex;align-items:center;gap:.6rem">
+            <input type="checkbox" id="chkHonorarios" checked style="width:16px;height:16px;cursor:pointer">
+            <label for="chkHonorarios" style="margin:0;cursor:pointer;font-weight:600">Cobrar esta cuota junto con el alquiler</label>
           </div>
         </div>
 
@@ -1259,6 +1304,8 @@ export function openCobroForm(alq, onDone, prefill = {}) {
         }
       };
 
+      let honorariosMontoActual = 0;
+
       const actualizarMora = () => {
         const f = $('#cobroForm', ov);
         const dias = pctMora > 0 ? calcularDiasMora(f.mes.value, f.fechaPago.value) : 0;
@@ -1276,15 +1323,15 @@ export function openCobroForm(alq, onDone, prefill = {}) {
         } else {
           blkMora.style.display = 'none';
         }
-        // Con una sola forma de pago, se mantiene sincronizada con el total (alquiler + mora)
-        if (pagos.length === 1) { pagos[0].monto = rentaBase + montoFinal; renderPagos(); }
+        // Con una sola forma de pago, se mantiene sincronizada con el total (alquiler + mora + honorarios)
+        if (pagos.length === 1) { pagos[0].monto = rentaBase + montoFinal + honorariosMontoActual; renderPagos(); }
         else actualizarResumen();
       };
 
       const actualizarResumen = () => {
         const el = ov.querySelector('#pagosResumen');
         if (!el) return;
-        const total = valorMonto(ov.querySelector('#cobroForm').monto.value) + (moraActual.monto || 0);
+        const total = valorMonto(ov.querySelector('#cobroForm').monto.value) + (moraActual.monto || 0) + honorariosMontoActual;
         const asignado = pagos.reduce((s, p) => s + (Number(p.monto) || 0), 0);
         if (pagos.length > 1) {
           const dif = Math.round((total - asignado) * 100) / 100;
@@ -1331,7 +1378,7 @@ export function openCobroForm(alq, onDone, prefill = {}) {
       };
 
       ov.querySelector('#btnAddPago').addEventListener('click', () => {
-        const total = valorMonto(ov.querySelector('#cobroForm').monto.value) + (moraActual.monto || 0);
+        const total = valorMonto(ov.querySelector('#cobroForm').monto.value) + (moraActual.monto || 0) + honorariosMontoActual;
         const asignado = pagos.reduce((s, p) => s + (Number(p.monto) || 0), 0);
         const restante = Math.max(0, total - asignado);
         const usados = pagos.map(p => p.metodoPago);
@@ -1359,6 +1406,29 @@ export function openCobroForm(alq, onDone, prefill = {}) {
       actualizarBlkComision();
       $('#cobroForm', ov).mes.addEventListener('change', actualizarBlkComision);
 
+      // Honorarios profesionales divididos en cuotas: se ofrece cobrar la próxima cuota
+      // pendiente junto con cualquier cobro, hasta completar la cantidad de meses pactada.
+      const honorariosMeses = Number(alq.honorariosMeses) || 0;
+      const honorariosCobradas = Number(alq.honorariosCobradas) || 0;
+      const blkHonorarios = ov.querySelector('#honorariosBlk');
+      const chkHonorarios = ov.querySelector('#chkHonorarios');
+      const inputHonorariosCuota = ov.querySelector('#honorariosCuotaMonto');
+      const actualizarHonorariosMontoActual = () => {
+        honorariosMontoActual = (blkHonorarios.style.display !== 'none' && chkHonorarios.checked)
+          ? (valorMonto(inputHonorariosCuota.value) || 0) : 0;
+        actualizarMora();
+      };
+      if (Number(alq.honorariosMonto) > 0 && honorariosCobradas < honorariosMeses) {
+        const cuotaMonto = Math.round(Number(alq.honorariosMonto) / honorariosMeses);
+        blkHonorarios.style.display = '';
+        ov.querySelector('#honorariosDetalle').textContent =
+          `Cuota ${honorariosCobradas + 1} de ${honorariosMeses} — total pactado ${fmtMontoInput(alq.honorariosMonto)}`;
+        inputHonorariosCuota.value = fmtMontoInput(cuotaMonto);
+        chkHonorarios.addEventListener('change', actualizarHonorariosMontoActual);
+        inputHonorariosCuota.addEventListener('input', actualizarHonorariosMontoActual);
+        actualizarHonorariosMontoActual();
+      }
+
       const mesImputadoLbl = ov.querySelector('#mesImputadoLbl');
       $('#cobroForm', ov).mes.addEventListener('change', e => {
         if (mesImputadoLbl) mesImputadoLbl.textContent = e.target.value;
@@ -1373,12 +1443,14 @@ export function openCobroForm(alq, onDone, prefill = {}) {
           .map(p => ({ metodoPago: p.metodoPago, monto: Number(p.monto), referencia: p.referencia || null }));
         if (!pagosValidos.length) { toast('Indicá el monto de al menos una forma de pago', { tipo: 'warning' }); return; }
 
+        const honorariosMontoAplicado = honorariosMontoActual;
+
         const rentaBase = f.monto.value ? valorMonto(f.monto.value) : 0;
-        const totalConMora = rentaBase + (moraActual.monto || 0);
+        const totalConMora = rentaBase + (moraActual.monto || 0) + honorariosMontoAplicado;
         if (pagosValidos.length > 1) {
           const suma = pagosValidos.reduce((s, p) => s + p.monto, 0);
           if (Math.round(suma * 100) !== Math.round(totalConMora * 100)) {
-            toast('La suma de las formas de pago no coincide con el monto total (alquiler + mora)', { tipo: 'warning' });
+            toast('La suma de las formas de pago no coincide con el monto total (alquiler + mora + honorarios)', { tipo: 'warning' });
             return;
           }
         }
@@ -1412,6 +1484,10 @@ export function openCobroForm(alq, onDone, prefill = {}) {
           referencia:     pagosValidos.length === 1 ? pagosValidos[0].referencia : null,
           pagos:          pagosValidos,
           nota:           f.nota.value || null,
+          // Monto de este pago puntual (no acumulado), para poder dejar registrado en el
+          // historial del mes cada abono por separado (cuánto pagó y cuándo, pago a pago).
+          montoAbono:          totalConMora,
+          montoAlquilerAbono:  rentaBase,
         };
 
         if (moraActual.monto > 0) {
@@ -1424,6 +1500,8 @@ export function openCobroForm(alq, onDone, prefill = {}) {
           const montoComision = valorMonto(ov.querySelector('#comisionInicialMonto').value);
           if (montoComision > 0) cobro.comisionInicialMonto = montoComision;
         }
+
+        if (honorariosMontoAplicado > 0) cobro.honorariosMonto = honorariosMontoAplicado;
 
         // Servicios (luz / impuestos): queda registrado en el cobro y se refleja en el recibo.
         if (chkServicios.checked) {
@@ -1447,6 +1525,23 @@ export function openCobroForm(alq, onDone, prefill = {}) {
           // próximo pago (y ahí se perdería el detalle de este monto puntual si no quedó impreso).
           imprimirRecibo({
             alq, cobro,
+            inquilino: getState().clientes.find(c => c.id === alq.inquilinoId),
+            propiedad: getState().propiedades.find(p => p.id === alq.propiedadId),
+            propietario: getState().propietarios.find(p => p.id === alq.propietarioId),
+          });
+        } else if (completaUnParcialAnterior) {
+          toast('Saldo cancelado — cobro completado');
+          // Recibo por este segundo (o siguiente) pago puntual, no por el acumulado del mes:
+          // muestra solo lo que se cobró ahora, dejando en claro que era el saldo restante.
+          imprimirRecibo({
+            alq,
+            cobro: {
+              ...cobro,
+              monto: totalConMora,
+              montoAlquiler: rentaBase,
+              saldoPendiente: 0,
+              nota: [cobro.nota, `Pago del saldo pendiente (correspondía ${fmtMontoInput(cobroExistente.saldoPendiente)})`].filter(Boolean).join(' · '),
+            },
             inquilino: getState().clientes.find(c => c.id === alq.inquilinoId),
             propiedad: getState().propiedades.find(p => p.id === alq.propiedadId),
             propietario: getState().propietarios.find(p => p.id === alq.propietarioId),

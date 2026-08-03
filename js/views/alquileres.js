@@ -3,7 +3,7 @@
    ============================================================ */
 import { getState, sel, actions, subscribe } from '../store.js';
 import { icon, CONTRATO_ESTADOS, ESTADOS_TAREA, PASOS_TAREA, MONEDAS, DIA_LIMITE_PAGO } from '../config.js';
-import { esc, fmtMoneda, fmtFechaCorta, garantesDeAlquiler, valorMonto, fmtMontoInput, parseFechaLocal, debounce } from '../lib.js';
+import { esc, fmtMoneda, fmtFechaCorta, garantesDeAlquiler, valorMonto, fmtMontoInput, parseFechaLocal, debounce, waLink } from '../lib.js';
 import { navegar } from '../router.js';
 import { openAlquilerForm, openCobroForm, openRenovacionForm, openTareaForm, openTareaDetalle, openAdelantoForm, openEntregaContratoForm } from './forms.js';
 import { openModal } from '../components/modal.js';
@@ -401,6 +401,7 @@ function pintarDetalle(el, id) {
         ${filaInline('Depósito', fmtMoneda(a.deposito, a.moneda))}
         ${filaInline('Comisión', a.comision ? `${a.comision}%` : null)}
         ${filaInline('Comisión inicial', a.comisionInicial ? (a.comisionInicialCobrada ? 'Cobrada' : 'Pendiente') : null)}
+        ${filaInline('Honorarios profesionales', a.honorariosMonto ? `${fmtMoneda(a.honorariosMonto, a.moneda)} en ${a.honorariosMeses} cuota${a.honorariosMeses > 1 ? 's' : ''} (${a.honorariosCobradas || 0}/${a.honorariosMeses} cobradas)` : null)}
       </div>
 
       <!-- Inquilino con WhatsApp -->
@@ -661,6 +662,16 @@ function pintarDetalle(el, id) {
       const cobro = (a.cobros || []).find(c => c.mes === btn.dataset.printLiq);
       if (!cobro) return;
       abrirFormLiquidacion({ alq: a, cobro }, () => location.hash = '#/liquidaciones');
+    });
+  });
+  el.querySelectorAll('[data-wa-rec]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const cobro = (a.cobros || []).find(c => c.mes === btn.dataset.waRec);
+      if (!cobro) return;
+      const tel = a.inquilinoTelefono || inq?.telefono;
+      if (!tel) { toast('Cargá el teléfono del inquilino para enviar por WhatsApp', { tipo: 'warning' }); return; }
+      window.open(waLink(tel, textoReciboWA(a, cobro, prop)), '_blank');
     });
   });
 
@@ -1205,6 +1216,10 @@ function renderMesCobro(m, a) {
         ${tipo === 'sin_cobro' ? 'Sin registrar' : ''}
         ${tipo === 'futuro'    ? 'Mes futuro' : ''}
       </div>
+      ${tipo === 'sin_cobro' && Number(a.honorariosMonto) > 0 && (Number(a.honorariosCobradas) || 0) < Number(a.honorariosMeses)
+        ? `<span class="badge" style="background:color-mix(in srgb,var(--warning) 18%,transparent);color:var(--warning);font-size:.65rem">💼 Honorarios pendientes (cuota ${(Number(a.honorariosCobradas)||0)+1}/${a.honorariosMeses})</span>`
+        : ''}
+      ${renderAbonosDetalle(cobro, a)}
       ${renderServiciosBadges(cobro)}
     </div>
 
@@ -1219,11 +1234,13 @@ function renderMesCobro(m, a) {
       ? `<div style="display:flex;gap:.4rem;flex-shrink:0;align-items:center">
            <button class="btn btn-xs btn-ghost" data-print-rec="${key}" title="Imprimir recibo">${icon('file')} Recibo</button>
            <button class="btn btn-xs btn-ghost" data-print-liq="${key}" title="Imprimir liquidación">${icon('download')} Liquid.</button>
+           <button class="btn btn-xs btn-ghost" data-wa-rec="${key}" title="Enviar recibo por WhatsApp" style="color:var(--success)">${icon('whatsapp')}</button>
            <button class="btn btn-xs btn-ghost" data-cob-deshacer="${cobro.id}" title="Deshacer cobro (por error)" style="color:var(--danger)">${icon('refresh')} Deshacer</button>
          </div>`
       : tipo === 'parcial'
         ? `<div style="display:flex;gap:.4rem;flex-shrink:0;align-items:center">
              <button class="btn btn-sm" data-mes-nuevo="${key}" data-cobro-id="${cobro.id}" style="background:var(--info);color:#fff;border:none">Completar</button>
+             <button class="btn btn-xs btn-ghost" data-wa-rec="${key}" title="Enviar recibo por WhatsApp" style="color:var(--success)">${icon('whatsapp')}</button>
              <button class="btn btn-xs btn-ghost" data-cob-deshacer="${cobro.id}" title="Deshacer todo lo cobrado de este mes" style="color:var(--danger)">${icon('refresh')}</button>
            </div>`
       : tipo === 'sin_cobro'
@@ -1251,6 +1268,35 @@ function renderServiciosBadges(cobro) {
   return `<div style="display:flex;gap:.35rem;margin-top:.3rem;flex-wrap:wrap">
     ${item('luz', '💡 Luz', cobro.servicios.luz)}
     ${item('impuestos', '📄 Impuestos', cobro.servicios.impuestos)}
+  </div>`;
+}
+
+/* Arma el texto del mensaje de WhatsApp para enviar el comprobante de un cobro —
+   el link wa.me solo permite pre-cargar texto (no adjuntar el PDF del recibo), así que
+   el flujo más automático posible es: un clic abre el chat con el inquilino con el
+   detalle del pago ya redactado, listo para enviar. */
+function textoReciboWA(a, cobro, prop) {
+  const dir = prop?.direccion || 'la propiedad';
+  const partes = [`Hola! Te confirmamos tu pago de alquiler de ${dir} — ${mesLabel(cobro.mes)}.`];
+  partes.push(`Monto recibido: ${fmtMoneda(cobro.monto, a.moneda)}`);
+  if (Number(cobro.saldoPendiente) > 0) {
+    partes.push(`Corresponde el mes: ${fmtMoneda(cobro.montoEsperado, a.moneda)}`);
+    partes.push(`Queda pendiente: ${fmtMoneda(cobro.saldoPendiente, a.moneda)}`);
+  } else if (cobro.montoEsperado && Math.round(cobro.monto * 100) !== Math.round(cobro.montoEsperado * 100)) {
+    partes.push('Saldo: cancelado ✅');
+  }
+  if (cobro.fechaPago) partes.push(`Fecha de pago: ${fmtFechaCorta(cobro.fechaPago)}`);
+  partes.push('¡Gracias!');
+  return partes.join('\n');
+}
+
+/* Detalle de un mes pagado en varias partes: muestra cada abono (fecha y monto) por
+   separado, para dejar constancia de cuándo se cobró el primer pago, el segundo, etc. */
+function renderAbonosDetalle(cobro, a) {
+  const abonos = cobro?.abonos || [];
+  if (abonos.length < 2) return '';
+  return `<div style="font-size:.72rem;color:var(--text-soft);margin-top:.3rem">
+    ${abonos.map(ab => `Pago ${ab.numero}: ${fmtMoneda(ab.monto, a.moneda)} el ${fmtFechaCorta(ab.fecha)}`).join(' · ')}
   </div>`;
 }
 

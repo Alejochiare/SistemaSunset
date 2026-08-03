@@ -2,7 +2,7 @@
    ROUTER — Hash router. Cada vista es un módulo independiente.
    ============================================================ */
 import inicio       from './views/inicio.js';
-import clientes     from './views/clientes.js';
+import clientes, { inquilinos } from './views/clientes.js';
 import propietarios from './views/propietarios.js';
 import propiedades  from './views/propiedades.js';
 import alquileres   from './views/alquileres.js';
@@ -15,7 +15,7 @@ import administracion from './views/administracion.js';
 import recibos         from './views/recibos.js';
 import tareas           from './views/tareas.js';
 
-const RUTAS = { inicio, clientes, propietarios, propiedades, alquileres, ventas, agenda, caja, temporales, liquidaciones, administracion, recibos, tareas };
+const RUTAS = { inicio, clientes, inquilinos, propietarios, propiedades, alquileres, ventas, agenda, caja, temporales, liquidaciones, administracion, recibos, tareas };
 
 let _cleanup = null;
 

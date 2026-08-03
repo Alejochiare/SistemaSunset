@@ -249,7 +249,8 @@ export function imprimirRecibo({ alq, cobro, inquilino, propiedad, propietario }
   const fecha = cobro.fechaPago || new Date().toISOString().slice(0, 10);
   const monto = cobro.monto || alq.montoActual || alq.montoInicial || 0;
   const montoMora = cobro.montoMora || 0;
-  const montoAlquiler = cobro.montoAlquiler ?? (monto - montoMora);
+  const montoHonorarios = cobro.honorariosMonto || 0;
+  const montoAlquiler = cobro.montoAlquiler ?? (monto - montoMora - montoHonorarios);
   const pago  = cobro.mes ? numPago(alq, cobro.mes) : null;
   const pagos = (cobro.pagos && cobro.pagos.length) ? cobro.pagos : null;
 
@@ -307,6 +308,12 @@ export function imprimirRecibo({ alq, cobro, inquilino, propiedad, propietario }
         <td>${esc(propiedad?.direccion || '—')}</td>
         <td class="right">${fmtMoneda(montoMora)}</td>
       </tr>` : ''}
+      ${montoHonorarios > 0 ? `
+      <tr>
+        <td>Honorarios profesionales${alq.honorariosMeses > 1 ? ` (cuota ${(Number(alq.honorariosCobradas) || 1)} de ${alq.honorariosMeses})` : ''}</td>
+        <td>${esc(propiedad?.direccion || '—')}</td>
+        <td class="right">${fmtMoneda(montoHonorarios)}</td>
+      </tr>` : ''}
       </tbody>
     </table>
 
@@ -315,6 +322,15 @@ export function imprimirRecibo({ alq, cobro, inquilino, propiedad, propietario }
         <div class="total-label">TOTAL RECIBIDO:</div>
         <div class="total-val">${fmtMoneda(monto)}</div>
       </div>
+      ${Number(cobro.montoEsperado) > 0 && (Number(cobro.saldoPendiente) > 0 || Math.round(monto * 100) !== Math.round(Number(cobro.montoEsperado) * 100)) ? `
+      <div class="total-row">
+        <div class="total-label">Corresponde este mes:</div>
+        <div class="total-val">${fmtMoneda(cobro.montoEsperado)}</div>
+      </div>
+      <div class="total-row">
+        <div class="total-label">${Number(cobro.saldoPendiente) > 0 ? 'Queda debiendo:' : 'Saldo:'}</div>
+        <div class="total-val" style="color:${Number(cobro.saldoPendiente) > 0 ? '#c62828' : '#2e7d32'}">${Number(cobro.saldoPendiente) > 0 ? fmtMoneda(cobro.saldoPendiente) : 'Cancelado'}</div>
+      </div>` : ''}
     </div>
 
     <!-- Servicios (luz / impuestos), si se registraron para este pago -->
