@@ -130,18 +130,18 @@ const CSS_PRINT_REST = `
   .doc-header { display: table; width: 100%; margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid #e9e9e9; }
   .doc-header > * { display: table-cell; vertical-align: middle; }
   .agencia-logo { font-size: 18px; font-weight: 800; color: #0f766e; letter-spacing: -0.3px; }
-  .agencia-sub  { font-size: 11px; color: #6b7280; margin-top: 2px; }
-  .agencia-info { font-size: 11px; color: #6b7280; line-height: 1.4; margin-top: 6px; }
+  .agencia-sub  { font-size: 11px; color: #4b5563; margin-top: 2px; }
+  .agencia-info { font-size: 11px; color: #4b5563; line-height: 1.4; margin-top: 6px; }
 
   .doc-tipo-bloque { display: table-cell; vertical-align: middle; text-align: right; width:160px; }
   .doc-tipo  { font-size: 18px; font-weight: 800; letter-spacing: .6px; color: #111; }
   .doc-num   { font-size: 12px; font-weight: 700; margin-top: 2px; color: #374151; }
-  .doc-fecha { font-size: 11px; color: #6b7280; margin-top: 4px; }
-  .doc-cuit  { font-size: 11px; color: #6b7280; margin-top: 4px; }
+  .doc-fecha { font-size: 11px; color: #4b5563; margin-top: 4px; }
+  .doc-cuit  { font-size: 11px; color: #4b5563; margin-top: 4px; }
 
   /* Sello discreto */
   .sello { border: 1px dashed #e5e7eb; border-radius: 4px; padding: 6px 8px; text-align: center; margin: 0 12px; background:#fafafa; white-space: nowrap; }
-  .sello-txt { font-size: 8px; color: #9ca3af; text-align: center; line-height: 1.3; letter-spacing: .4px; }
+  .sello-txt { font-size: 8px; color: #4b5563; text-align: center; line-height: 1.3; letter-spacing: .4px; }
 
   /* Banda de concepto */
   .banda-concepto { background: #f8fafc; border-left: 4px solid #0f766e; padding: 8px 12px; font-size: 12px; font-weight: 800; color: #111; margin: 10px 0; border-radius:4px }
@@ -149,7 +149,7 @@ const CSS_PRINT_REST = `
   /* Datos cliente — columnas por flotado en vez de grid */
   .cliente-blk { margin: 10px 0; font-size: 12px; overflow: hidden; }
   .dato-fld, .cliente-col { float: left; width: 50%; box-sizing: border-box; padding-right: 10px; margin-bottom: 5px; }
-  .lbl, .label-fld { color: #777; font-size: 9px; white-space: nowrap; margin-right: 3px; }
+  .lbl, .label-fld { color: #4b5563; font-size: 9px; white-space: nowrap; margin-right: 3px; }
 
   /* Bloque contrato */
   .contrato-blk { border: 1px solid #ccc; padding: 6px 10px; margin: 8px 0; font-size: 10px; overflow: hidden; }
@@ -234,7 +234,7 @@ function abrirVentana(titulo, cuerpo) {
    contra la página actual (no solo location.origin) para que funcione igual en localhost,
    en GitHub Pages con subcarpeta (/SistemaSunset/) y en cualquier otro despliegue. */
 function defaultLogoUrl() {
-  try { return new URL('logooo.png', location.href).href; } catch { return 'logooo.png'; }
+  try { return new URL('logooo.jpeg', location.href).href; } catch { return 'logooo.jpeg'; }
 }
 
 /* ── Header común del documento ──────────────────────────── */
@@ -1174,7 +1174,7 @@ function construirResumenOcupacionHTML({ propietario, mes, propiedades = [], fil
           </tbody>
         </table>
         <div style="text-align:right;font-size:10px;font-weight:700;margin-top:2px">Subtotal ${esc(prop.nombreTemporal || prop.direccion)}: ${fmtMoneda(subtotal)}</div>
-        ` : `<div style="font-size:10px;color:#888;padding:6px 0">Sin reservas este mes.</div>`}
+        ` : `<div style="font-size:10px;color:#4b5563;padding:6px 0">Sin reservas este mes.</div>`}
       </div>`;
     }).join('')}
 
@@ -1186,7 +1186,7 @@ function construirResumenOcupacionHTML({ propietario, mes, propiedades = [], fil
     </div>
 
     <div class="firma-blk" style="border-top:1px solid #ccc;margin-top:10px;padding-top:6px">
-      <div style="font-size:9px;color:#888">Informe generado el ${fmtFecha(fecha)} · uso informativo, no es un comprobante fiscal.</div>
+      <div style="font-size:9px;color:#4b5563">Informe generado el ${fmtFecha(fecha)} · uso informativo, no es un comprobante fiscal.</div>
     </div>
   </div>`;
 
@@ -1280,7 +1280,7 @@ function construirInformeCaptacionHTML({ captacion: c, periodoDesde, periodoHast
     </div>
 
     <div class="firma-blk" style="border-top:1px solid #ccc;margin-top:10px;padding-top:6px">
-      <div style="font-size:9px;color:#888">Informe generado el ${fmtFecha(fecha)} · uso informativo para el propietario.</div>
+      <div style="font-size:9px;color:#4b5563">Informe generado el ${fmtFecha(fecha)} · uso informativo para el propietario.</div>
     </div>
   </div>`;
 }
