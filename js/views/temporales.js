@@ -3,7 +3,7 @@
    ============================================================ */
 import { getState, sel, actions, subscribe } from '../store.js';
 import { icon, ESTADOS_TAREA, PASOS_TAREA } from '../config.js';
-import { esc, fmtFechaCorta, fmtMontoInput, valorMonto, parseFechaLocal, waLink, compartirArchivoPorWhatsApp } from '../lib.js';
+import { esc, fmtFechaCorta, fmtMontoInput, valorMonto, parseFechaLocal, waLink, compartirArchivoPorWhatsApp, avisoEnvioWhatsApp } from '../lib.js';
 import { openModal } from '../components/modal.js';
 import { toast } from '../components/toast.js';
 import { imprimirReciboTemporal, generarPDFReciboTemporal, imprimirResumenOcupacion, generarPDFInformeOcupacion } from '../imprimir.js';
@@ -218,7 +218,9 @@ export default function temporales(root, param) {
       const texto = `Hola${propietario?.nombre ? ' ' + propietario.nombre : ''}! Te comparto el informe de ocupación de ${mesLabelLargo(mesActual)}.`;
       try {
         const blob = await generarPDFInformeOcupacion({ propietario, mes: mesActual, propiedades: props, filas });
-        await compartirArchivoPorWhatsApp({ numero: tel, texto, archivo: blob, nombreArchivo: `Informe ${mesLabelLargo(mesActual)}.pdf` });
+        const resultado = await compartirArchivoPorWhatsApp({ numero: tel, texto, archivo: blob, nombreArchivo: `Informe ${mesLabelLargo(mesActual)}.pdf` });
+        const { msg, ...opts } = avisoEnvioWhatsApp(resultado, 'el informe');
+        toast(msg, opts);
       } catch (err) {
         console.warn('No se pudo generar el PDF del informe:', err);
         toast('No se pudo generar el PDF (revisá la conexión a internet)', { tipo: 'danger' });
@@ -890,7 +892,9 @@ function abrirDetalleTemporal(t, onDone) {
         const texto = `Hola${t.huesped ? ' ' + t.huesped : ''}! Te comparto el recibo de tu alquiler temporario en ${prop?.nombreTemporal || prop?.direccion || 'la propiedad'}.`;
         try {
           const blob = await generarPDFReciboTemporal({ temporal: t, propiedad: prop }, 'recibo-temporario.pdf');
-          await compartirArchivoPorWhatsApp({ numero: t.telefono, texto, archivo: blob, nombreArchivo: 'recibo-temporario.pdf' });
+          const resultado = await compartirArchivoPorWhatsApp({ numero: t.telefono, texto, archivo: blob, nombreArchivo: 'recibo-temporario.pdf' });
+          const { msg, ...opts } = avisoEnvioWhatsApp(resultado, 'el recibo');
+          toast(msg, opts);
         } catch (err) {
           console.error('Error generando o compartiendo el recibo temporario:', err);
           toast('No se pudo generar el PDF para compartir por WhatsApp', { tipo: 'danger' });

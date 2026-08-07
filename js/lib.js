@@ -146,7 +146,7 @@ export async function compartirArchivoPorWhatsApp({ numero, texto = '', archivo,
     if (typeof navigator !== 'undefined' && navigator.share) {
       if (navigator.canShare?.({ files: [file] })) {
         await navigator.share({ files: [file], text: mensaje, title: 'Documento compartido' });
-        return true;
+        return 'shared';
       }
     }
   } catch (err) {
@@ -163,12 +163,22 @@ export async function compartirArchivoPorWhatsApp({ numero, texto = '', archivo,
       console.warn('No se pudo descargar el archivo automáticamente:', e);
     }
     window.open(link, '_blank', 'noopener,noreferrer');
-    return false;
+    return 'fallback';
   }
 
   // Si todo lo demás falló, forzar descarga
   descargar(archivo, nombreArchivo, tipo);
-  return false;
+  return 'fallback';
+}
+
+/** Arma el toast a mostrar según lo que devolvió compartirArchivoPorWhatsApp, para que
+ *  quien envía sepa si el PDF se adjuntó solo o si hay que adjuntarlo a mano en el chat
+ *  que se abrió (fallback de desktop) — sin este aviso es fácil creer que ya se mandó el
+ *  recibo cuando en realidad el contacto solo recibió el mensaje de texto. */
+export function avisoEnvioWhatsApp(resultado, cosa = 'el documento') {
+  if (resultado === 'shared') return { msg: 'Enviado por WhatsApp', tipo: 'success' };
+  if (resultado === 'fallback') return { msg: `Se descargó ${cosa} — adjuntalo en el chat de WhatsApp que se abrió para enviarlo`, tipo: 'warning', duracion: 7000 };
+  return { msg: 'No se pudo compartir por WhatsApp', tipo: 'danger' };
 }
 
 export function descargar(contenido, nombre, tipo = 'text/plain') {
